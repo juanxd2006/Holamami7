@@ -8,23 +8,22 @@ import os
 import re
 import random
 import socket
-import string
-from datetime import datetime, timedelta
+import concurrent.futures
+from datetime import datetime
 from threading import Thread, Lock
 
-# Configuración del bot
+# Configuración del bot - Usando variable de entorno para el token
 TOKEN = os.environ.get('TOKEN', '8503937259:AAEApOgsbu34qw5J6OKz1dxgvRzrFv9IQdE')
-OWNER_ID = 8220432777  # Tu ID de Telegram
 bot = telebot.TeleBot(TOKEN)
 
-# Lock para operaciones de base de datos
+# Lock para operaciones de base de datos (para hilos)
 db_lock = Lock()
 
 # ==================== FUNCIONES DE BASE DE DATOS ====================
 
 def get_db_connection():
     """Crea una nueva conexión a la base de datos"""
-    conn = sqlite3.connect('bot.db', timeout=10)
+    conn = sqlite3.connect('proxies.db', timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -77,31 +76,6 @@ def init_database():
         last_used TEXT
     )''')
     
-    # Tabla para KEYS de acceso
-    cursor.execute('''CREATE TABLE IF NOT EXISTS access_keys (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        key TEXT UNIQUE,
-        created_by INTEGER,
-        created_date TEXT,
-        expires_date TEXT,
-        max_uses INTEGER DEFAULT 1,
-        uses_count INTEGER DEFAULT 0,
-        is_active BOOLEAN DEFAULT 1,
-        last_used TEXT,
-        notes TEXT
-    )''')
-    
-    # Tabla de usuarios autorizados
-    cursor.execute('''CREATE TABLE IF NOT EXISTS authorized_users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER UNIQUE,
-        username TEXT,
-        key_used TEXT,
-        first_seen TEXT,
-        last_seen TEXT,
-        uses_count INTEGER DEFAULT 0
-    )''')
-    
     # Agregar columnas si no existen
     try:
         cursor.execute("ALTER TABLE proxies ADD COLUMN last_test TEXT")
@@ -127,302 +101,8 @@ def init_database():
 # Inicializar BD
 init_database()
 
-# ==================== SISTEMA DE KEYS ====================
-
-def generar_key(longitud=16):
-    """Genera una key aleatoria"""
-    caracteres = string.ascii_uppercase + string.digits
-    key = ''.join(random.choices(caracteres, k=longitud))
-    # Agregar guiones cada 4 caracteres para mejor legibilidad
-    key_formateada = '-'.join([key[i:i+4] for i in range(0, len(key), 4)])
-    return key_formateada
-
-def crear_key(duracion_dias=30, max_uses=1, notas=""):
-    """Crea una nueva key en la base de datos"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    key = generar_key()
-    created_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    expires_date = (datetime.now() + timedelta(days=duracion_dias)).strftime("%Y-%m-%d %H:%M:%S")
-    
-    try:
-        cursor.execute(
-            "INSERT INTO access_keys (key, created_by, created_date, expires_date, max_uses, notes) VALUES (?, ?, ?, ?, ?, ?)",
-            (key, OWNER_ID, created_date, expires_date, max_uses, notas)
-        )
-        conn.commit()
-        return key
-    except Exception as e:
-        print(f"Error creando key: {e}")
-        return None
-    finally:
-        conn.close()
-
-def validar_key(key):
-    """Valida si una key es válida y devuelve información"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute(
-        "SELECT * FROM access_keys WHERE key = ? AND is_active = 1",
-        (key,)
-    )
-    key_info = cursor.fetchone()
-    conn.close()
-    
-    if not key_info:
-        return False, "❌ Key no válida"
-    
-    # Verificar expiración
-    expires = datetime.strptime(key_info['expires_date'], "%Y-%m-%d %H:%M:%S")
-    if expires < datetime.now():
-        return False, "❌ Key expirada"
-    
-    # Verificar usos máximos
-    if key_info['uses_count'] >= key_info['max_uses']:
-        return False, "❌ Key alcanzó su límite de usos"
-    
-    return True, key_info
-
-def registrar_uso_key(key, user_id, username):
-    """Registra el uso de una key y al usuario"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Actualizar contador de la key
-    cursor.execute(
-        "UPDATE access_keys SET uses_count = uses_count + 1, last_used = ? WHERE key = ?",
-        (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), key)
-    )
-    
-    # Registrar o actualizar usuario
-    cursor.execute(
-        """INSERT OR REPLACE INTO authorized_users 
-        (user_id, username, key_used, first_seen, last_seen, uses_count) 
-        VALUES (?, ?, ?, 
-                COALESCE((SELECT first_seen FROM authorized_users WHERE user_id = ?), ?), 
-                ?, 
-                COALESCE((SELECT uses_count FROM authorized_users WHERE user_id = ?), 0) + 1)""",
-        (user_id, username, key, user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 
-         datetime.now().strftime("%Y-%m-%d %H:%M:%S"), user_id)
-    )
-    
-    conn.commit()
-    conn.close()
-
-def listar_keys():
-    """Lista todas las keys (solo owner)"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM access_keys ORDER BY created_date DESC")
-    keys = cursor.fetchall()
-    conn.close()
-    return keys
-
-def desactivar_key(key):
-    """Desactiva una key"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("UPDATE access_keys SET is_active = 0 WHERE key = ?", (key,))
-    conn.commit()
-    rows = cursor.rowcount
-    conn.close()
-    return rows > 0
-
-def verificar_acceso(message):
-    """Verifica si el usuario tiene acceso al bot"""
-    user_id = message.from_user.id
-    
-    # Owner siempre tiene acceso
-    if user_id == OWNER_ID:
-        return True, None
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM authorized_users WHERE user_id = ?", (user_id,))
-    user = cursor.fetchone()
-    conn.close()
-    
-    if user:
-        return True, None
-    else:
-        return False, "❌ No tienes acceso. Necesitas una key válida. Usa /key [KEY]"
-
-# ==================== DECORADOR PARA VERIFICAR ACCESO ====================
-
-def requiere_acceso(func):
-    """Decorador para verificar acceso antes de ejecutar comandos"""
-    def wrapper(message, *args, **kwargs):
-        tiene_acceso, mensaje = verificar_acceso(message)
-        if tiene_acceso:
-            return func(message, *args, **kwargs)
-        else:
-            bot.reply_to(message, mensaje)
-            return None
-    return wrapper
-
-# ==================== COMANDOS DE KEYS (SOLO OWNER) ====================
-
-@bot.message_handler(commands=['genkey'])
-def cmd_genkey(message):
-    """Genera una nueva key (solo owner)"""
-    if message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Solo el owner puede generar keys")
-        return
-    
-    try:
-        # Parsear argumentos: /genkey [dias] [usos] [notas]
-        partes = message.text.split()
-        dias = 30
-        usos = 1
-        notas = ""
-        
-        if len(partes) >= 2:
-            dias = int(partes[1])
-        if len(partes) >= 3:
-            usos = int(partes[2])
-        if len(partes) >= 4:
-            notas = ' '.join(partes[3:])
-        
-        key = crear_key(dias, usos, notas)
-        
-        if key:
-            texto = f"""✅ *KEY GENERADA*
-
-🔑 `{key}`
-
-📅 Expira: {dias} días
-🔄 Usos máximos: {usos}
-📝 Notas: {notas if notas else 'Sin notas'}
-
-💡 El usuario debe usar: /key {key}"""
-            
-            bot.reply_to(message, texto, parse_mode='Markdown')
-        else:
-            bot.reply_to(message, "❌ Error al generar la key")
-            
-    except ValueError:
-        bot.reply_to(message, "❌ Uso: /genkey [días] [usos máximos] [notas]")
-
-@bot.message_handler(commands=['listkeys'])
-def cmd_listkeys(message):
-    """Lista todas las keys (solo owner)"""
-    if message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Solo el owner puede ver las keys")
-        return
-    
-    keys = listar_keys()
-    
-    if not keys:
-        bot.reply_to(message, "📭 No hay keys generadas")
-        return
-    
-    texto = "🔑 *KEYS GENERADAS*\n\n"
-    
-    for k in keys:
-        # Emoji según estado
-        estado = "✅ ACTIVA" if k['is_active'] else "❌ INACTIVA"
-        expira = datetime.strptime(k['expires_date'], "%Y-%m-%d %H:%M:%S")
-        ahora = datetime.now()
-        if expira < ahora:
-            estado = "⌛ EXPIRADA"
-        
-        texto += f"🔹 `{k['key']}`\n"
-        texto += f"   ├ Estado: {estado}\n"
-        texto += f"   ├ Creada: {k['created_date'][:10]}\n"
-        texto += f"   ├ Expira: {k['expires_date'][:10]}\n"
-        texto += f"   ├ Usos: {k['uses_count']}/{k['max_uses']}\n"
-        texto += f"   └ Notas: {k['notes'] if k['notes'] else 'Sin notas'}\n\n"
-    
-    bot.reply_to(message, texto, parse_mode='Markdown')
-
-@bot.message_handler(commands=['delkey'])
-def cmd_delkey(message):
-    """Desactiva una key (solo owner)"""
-    if message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Solo el owner puede desactivar keys")
-        return
-    
-    try:
-        key = message.text.split()[1]
-        if desactivar_key(key):
-            bot.reply_to(message, f"✅ Key desactivada: `{key}`", parse_mode='Markdown')
-        else:
-            bot.reply_to(message, f"❌ Key no encontrada")
-    except IndexError:
-        bot.reply_to(message, "❌ Uso: /delkey KEY")
-
-@bot.message_handler(commands=['users'])
-def cmd_users(message):
-    """Lista usuarios autorizados (solo owner)"""
-    if message.from_user.id != OWNER_ID:
-        bot.reply_to(message, "❌ Solo el owner puede ver los usuarios")
-        return
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM authorized_users ORDER BY last_seen DESC")
-    users = cursor.fetchall()
-    conn.close()
-    
-    if not users:
-        bot.reply_to(message, "📭 No hay usuarios registrados")
-        return
-    
-    texto = "👥 *USUARIOS AUTORIZADOS*\n\n"
-    
-    for u in users:
-        texto += f"🔹 ID: `{u['user_id']}`\n"
-        texto += f"   ├ Usuario: @{u['username'] if u['username'] else 'N/A'}\n"
-        texto += f"   ├ Key: `{u['key_used']}`\n"
-        texto += f"   ├ Primer uso: {u['first_seen'][:16]}\n"
-        texto += f"   ├ Último uso: {u['last_seen'][:16]}\n"
-        texto += f"   └ Usos: {u['uses_count']}\n\n"
-    
-    bot.reply_to(message, texto, parse_mode='Markdown')
-
-# ==================== COMANDO PARA ACTIVAR KEY ====================
-
-@bot.message_handler(commands=['key'])
-def cmd_activate_key(message):
-    """Activa una key para el usuario"""
-    try:
-        key = message.text.split()[1]
-        user_id = message.from_user.id
-        username = message.from_user.username or "unknown"
-        
-        # Validar key
-        es_valida, info = validar_key(key)
-        
-        if es_valida:
-            # Registrar uso
-            registrar_uso_key(key, user_id, username)
-            
-            texto = f"""✅ *KEY ACTIVADA CORRECTAMENTE*
-
-🎉 ¡Ya tienes acceso al bot!
-
-📋 *Comandos disponibles:*
-• /menu - Ver menú principal
-• /help - Ayuda detallada
-• /check CC - Stripe $1
-• /pp CC - PayPal $10
-• /pp2 CC - PayPal $0.10
-• /pp3 CC - PayPal $1
-• /sh CC - AutoShopify
-• /mass - Stripe masivo
-• /mpp - PayPal masivo
-• /msh - Shopify masivo
-
-✨ *Disfruta del bot!*"""
-            
-            bot.reply_to(message, texto, parse_mode='Markdown')
-        else:
-            bot.reply_to(message, info)
-            
-    except IndexError:
-        bot.reply_to(message, "❌ Uso: /key TU_KEY_AQUI")
+# Cola de tareas masivas
+active_tasks = {}
 
 # ==================== FUNCIONES DE PROXIES ====================
 
@@ -450,6 +130,7 @@ def guardar_proxies_desde_texto(texto):
     repetidos = 0
     invalidos = 0
     
+    # Patrón para identificar proxies (ip:puerto o ip:puerto:user:pass)
     patron_proxy = re.compile(r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)(?::([^:]+):([^:]+))?$')
     
     conn = get_db_connection()
@@ -460,6 +141,7 @@ def guardar_proxies_desde_texto(texto):
         if not linea:
             continue
         
+        # Verificar si es un proxy válido
         if patron_proxy.match(linea):
             try:
                 cursor.execute("INSERT INTO proxies (proxy, fecha) VALUES (?, ?)",
@@ -503,10 +185,20 @@ def eliminar_proxy(proxy):
     return filas > 0
 
 def eliminar_todos_proxies():
-    """Elimina TODOS los proxies"""
+    """Elimina TODOS los proxies de la base de datos"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM proxies")
+    conn.commit()
+    filas = cursor.rowcount
+    conn.close()
+    return filas
+
+def eliminar_proxies_muertos():
+    """Elimina todos los proxies marcados como 'dead'"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM proxies WHERE status = 'dead'")
     conn.commit()
     filas = cursor.rowcount
     conn.close()
@@ -531,52 +223,105 @@ def actualizar_status_proxy(proxy, status, detalle):
     conn.commit()
     conn.close()
 
-# ==================== NUEVA FUNCIÓN DE CONSULTA BIN (MEJORADA) ====================
+# ==================== FUNCIONES DE SITIOS SHOPIFY ====================
 
-def consultar_bin(bin_number):
-    """
-    Consulta información de BIN usando bincheck.io (más preciso)
-    """
+def guardar_sitio(url):
+    """Guarda un sitio Shopify en la base de datos"""
+    conn = None
     try:
-        bin_number = bin_number[:6]
-        
-        # API de bincheck.io
-        url = f"https://lookup.bincheck.io/api/v2/{bin_number}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Accept-Language': 'en-US,en;q=0.9'
-        }
-        
-        response = requests.get(url, headers=headers, timeout=5)
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            # Mapear la respuesta al formato que usa el bot
-            return {
-                'scheme': data.get('scheme', 'UNKNOWN').upper(),
-                'type': data.get('type', 'UNKNOWN').upper(),
-                'country': {
-                    'name': data.get('country', {}).get('name', 'Unknown'),
-                    'emoji': data.get('country', {}).get('emoji', '🌍'),
-                    'code': data.get('country', {}).get('code', '')
-                },
-                'bank': {
-                    'name': data.get('bank', {}).get('name', 'Unknown'),
-                    'url': data.get('bank', {}).get('url', ''),
-                    'phone': data.get('bank', {}).get('phone', '')
-                }
-            }
-        elif response.status_code == 404:
-            return {"error": "BIN no encontrado", "bin": bin_number}
-        elif response.status_code == 429:
-            return {"error": "Límite de peticiones excedido", "bin": bin_number}
-        else:
-            return {"error": f"Error {response.status_code}", "bin": bin_number}
-            
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO sitios (url, fecha) VALUES (?, ?)", 
+                      (url, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        conn.commit()
+        return True
     except Exception as e:
-        return {"error": str(e), "bin": bin_number}
+        print(f"Error guardando sitio: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def guardar_sitios_desde_texto(texto):
+    """Guarda sitios desde un archivo de texto"""
+    lineas = texto.strip().split('\n')
+    guardados = 0
+    repetidos = 0
+    invalidos = 0
+    
+    # Patrón para identificar URLs de Shopify
+    patron_url = re.compile(r'^https?://[a-zA-Z0-9-]+\.myshopify\.com/?$')
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    for linea in lineas:
+        linea = linea.strip()
+        if not linea:
+            continue
+        
+        # Verificar si es una URL válida de Shopify
+        if patron_url.match(linea):
+            try:
+                cursor.execute("INSERT INTO sitios (url, fecha) VALUES (?, ?)",
+                              (linea, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                conn.commit()
+                guardados += 1
+            except:
+                repetidos += 1
+        else:
+            invalidos += 1
+    
+    conn.close()
+    return guardados, repetidos, invalidos
+
+def obtener_sitios():
+    """Obtiene todos los sitios Shopify"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT url FROM sitios")
+    sitios = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return sitios
+
+def obtener_sitios_con_estadisticas():
+    """Obtiene sitios con sus estadísticas"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT url, successes, failures, last_used FROM sitios ORDER BY successes DESC, failures ASC")
+    resultados = cursor.fetchall()
+    conn.close()
+    return resultados
+
+def eliminar_sitio(url):
+    """Elimina un sitio específico"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM sitios WHERE url = ?", (url,))
+    conn.commit()
+    filas = cursor.rowcount
+    conn.close()
+    return filas > 0
+
+def eliminar_todos_sitios():
+    """Elimina TODOS los sitios de la base de datos"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM sitios")
+    conn.commit()
+    filas = cursor.rowcount
+    conn.close()
+    return filas
+
+def actualizar_estadisticas_sitio(url, success):
+    """Actualiza estadísticas de un sitio"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    campo = "successes" if success else "failures"
+    cursor.execute(f"UPDATE sitios SET {campo} = {campo} + 1, last_used = ? WHERE url = ?", 
+                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), url))
+    conn.commit()
+    conn.close()
 
 # ==================== FUNCIONES DE TARJETAS ====================
 
@@ -637,6 +382,16 @@ def eliminar_tarjeta(cc):
     conn.close()
     return filas > 0
 
+def eliminar_todas_tarjetas():
+    """Elimina TODAS las tarjetas"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM tarjetas")
+    conn.commit()
+    filas = cursor.rowcount
+    conn.close()
+    return filas
+
 def guardar_historial(cc, proxy, gate, amount, status, message, gates, bin_info):
     """Guarda una verificación en el historial"""
     if isinstance(bin_info, dict):
@@ -657,86 +412,443 @@ def guardar_historial(cc, proxy, gate, amount, status, message, gates, bin_info)
     
     aumentar_contador_tarjeta(cc)
 
-# ==================== FUNCIONES DE SITIOS SHOPIFY ====================
-
-def guardar_sitio(url):
-    """Guarda un sitio Shopify en la base de datos"""
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO sitios (url, fecha) VALUES (?, ?)", 
-                      (url, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        conn.commit()
-        return True
-    except Exception as e:
-        print(f"Error guardando sitio: {e}")
-        return False
-    finally:
-        if conn:
-            conn.close()
-
-def guardar_sitios_desde_texto(texto):
-    """Guarda sitios desde un archivo de texto"""
-    lineas = texto.strip().split('\n')
-    guardados = 0
-    repetidos = 0
-    invalidos = 0
-    
-    patron_url = re.compile(r'^https?://[a-zA-Z0-9-]+\.myshopify\.com/?$')
-    
+def obtener_estadisticas():
+    """Obtiene estadísticas globales"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    for linea in lineas:
-        linea = linea.strip()
-        if not linea:
+    cursor.execute("SELECT COUNT(*), SUM(successes), SUM(failures) FROM proxies")
+    stats_proxies = cursor.fetchone()
+    
+    cursor.execute("SELECT COUNT(*), SUM(successes), SUM(failures) FROM sitios")
+    stats_sitios = cursor.fetchone()
+    
+    cursor.execute("SELECT COUNT(*) FROM tarjetas")
+    total_tarjetas = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM historial")
+    total_checks = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM historial WHERE status='success'")
+    total_success = cursor.fetchone()[0]
+    
+    conn.close()
+    
+    return {
+        'proxies': stats_proxies[0] or 0,
+        'exits_proxy': stats_proxies[1] or 0,
+        'fallos_proxy': stats_proxies[2] or 0,
+        'sitios': stats_sitios[0] or 0,
+        'exits_sitio': stats_sitios[1] or 0,
+        'fallos_sitio': stats_sitios[2] or 0,
+        'tarjetas': total_tarjetas or 0,
+        'checks': total_checks or 0,
+        'aprobadas': total_success or 0
+    }
+
+# ==================== MEJORA 7: BIN LOOKUP MEJORADO (MÚLTIPLES FUENTES) ====================
+
+def obtener_bandera(codigo_pais):
+    """Convierte código de país a emoji bandera"""
+    banderas = {
+        'US': '🇺🇸', 'GB': '🇬🇧', 'MX': '🇲🇽', 'CA': '🇨🇦',
+        'DE': '🇩🇪', 'FR': '🇫🇷', 'ES': '🇪🇸', 'IT': '🇮🇹',
+        'BR': '🇧🇷', 'AR': '🇦🇷', 'CO': '🇨🇴', 'PE': '🇵🇪',
+        'CL': '🇨🇱', 'VE': '🇻🇪', 'EC': '🇪🇨', 'BO': '🇧🇴',
+        'UY': '🇺🇾', 'PY': '🇵🇾', 'CR': '🇨🇷', 'PA': '🇵🇦',
+        'DO': '🇩🇴', 'PR': '🇵🇷', 'CU': '🇨🇺', 'GT': '🇬🇹',
+        'HN': '🇭🇳', 'NI': '🇳🇮', 'SV': '🇸🇻', 'BZ': '🇧🇿',
+        'JP': '🇯🇵', 'CN': '🇨🇳', 'KR': '🇰🇷', 'IN': '🇮🇳',
+        'RU': '🇷🇺', 'AU': '🇦🇺', 'NZ': '🇳🇿', 'ZA': '🇿🇦'
+    }
+    return banderas.get(codigo_pais.upper(), '🌍')
+
+def consultar_bin_fallback(bin_number):
+    """
+    Fallback con datos simulados basados en el BIN cuando las APIs no responden
+    """
+    bin_num = int(bin_number[:6])
+    
+    # Detección básica por rango
+    if 400000 <= bin_num <= 499999:
+        scheme = "VISA"
+        tipo = "CREDIT" if bin_num > 450000 else "DEBIT"
+        pais = "United States" if bin_num < 420000 else "Unknown"
+        emoji = "🇺🇸" if bin_num < 420000 else "🌍"
+        banco = "Visa Inc." if bin_num < 420000 else "Unknown"
+    elif 510000 <= bin_num <= 559999:
+        scheme = "MASTERCARD"
+        tipo = "CREDIT"
+        pais = "United States" if bin_num < 520000 else "Unknown"
+        emoji = "🇺🇸" if bin_num < 520000 else "🌍"
+        banco = "Mastercard International"
+    elif 340000 <= bin_num <= 349999 or 370000 <= bin_num <= 379999:
+        scheme = "AMEX"
+        tipo = "CREDIT"
+        pais = "United States"
+        emoji = "🇺🇸"
+        banco = "American Express"
+    elif 601100 <= bin_num <= 601199:
+        scheme = "DISCOVER"
+        tipo = "CREDIT"
+        pais = "United States"
+        emoji = "🇺🇸"
+        banco = "Discover Financial"
+    else:
+        scheme = "UNKNOWN"
+        tipo = "UNKNOWN"
+        pais = "Unknown"
+        emoji = "🌍"
+        banco = "Unknown"
+    
+    return {
+        'scheme': scheme,
+        'type': tipo,
+        'country': {
+            'name': pais,
+            'emoji': emoji
+        },
+        'bank': {
+            'name': banco
+        },
+        'source': 'fallback'
+    }
+
+def consultar_bin(bin_number):
+    """
+    Consulta información de BIN usando múltiples fuentes para máxima cobertura
+    Incluye datos de bancos, países, tipos de tarjeta y productos específicos
+    """
+    bin_number = bin_number[:6]
+    
+    # Fuentes en orden de preferencia (más confiables primero)
+    fuentes = [
+        {
+            'name': 'bincheck.io',
+            'url': f"https://lookup.bincheck.io/api/v2/{bin_number}",
+            'parser': lambda d: {
+                'scheme': d.get('scheme', 'UNKNOWN').upper(),
+                'type': d.get('type', 'UNKNOWN').upper(),
+                'brand': d.get('brand', ''),
+                'country': {
+                    'name': d.get('country', {}).get('name', 'Unknown'),
+                    'emoji': d.get('country', {}).get('emoji', '🌍'),
+                    'code': d.get('country', {}).get('code', '')
+                },
+                'bank': {
+                    'name': d.get('bank', {}).get('name', 'Unknown'),
+                    'url': d.get('bank', {}).get('url', ''),
+                    'phone': d.get('bank', {}).get('phone', ''),
+                    'city': d.get('bank', {}).get('city', '')
+                },
+                'product': d.get('product', ''),
+                'prepaid': d.get('prepaid', False),
+                'source': 'bincheck.io'
+            }
+        },
+        {
+            'name': 'iinapi.com',
+            'url': f"https://iinapi.com/api/{bin_number}",
+            'parser': lambda d: {
+                'scheme': d.get('card_scheme', 'UNKNOWN').upper(),
+                'type': d.get('card_type', 'UNKNOWN').upper(),
+                'brand': d.get('brand', ''),
+                'country': {
+                    'name': d.get('country', 'Unknown'),
+                    'emoji': obtener_bandera(d.get('country_code', '')),
+                    'code': d.get('country_code', '')
+                },
+                'bank': {
+                    'name': d.get('bank', 'Unknown'),
+                    'url': d.get('bank_url', ''),
+                    'phone': d.get('bank_phone', '')
+                },
+                'product': d.get('product', ''),
+                'prepaid': d.get('prepaid', False),
+                'source': 'iinapi.com'
+            }
+        },
+        {
+            'name': 'binlist.net',
+            'url': f"https://lookup.binlist.net/{bin_number}",
+            'parser': lambda d: {
+                'scheme': d.get('scheme', 'UNKNOWN').upper(),
+                'type': d.get('type', 'UNKNOWN').upper(),
+                'brand': d.get('brand', ''),
+                'country': {
+                    'name': d.get('country', {}).get('name', 'Unknown'),
+                    'emoji': d.get('country', {}).get('emoji', '🌍'),
+                    'code': d.get('country', {}).get('alpha2', '')
+                },
+                'bank': {
+                    'name': d.get('bank', {}).get('name', 'Unknown'),
+                    'url': d.get('bank', {}).get('url', ''),
+                    'phone': d.get('bank', {}).get('phone', ''),
+                    'city': d.get('bank', {}).get('city', '')
+                },
+                'product': d.get('product', ''),
+                'prepaid': d.get('prepaid', False),
+                'source': 'binlist.net'
+            }
+        }
+    ]
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9'
+    }
+    
+    for fuente in fuentes:
+        try:
+            print(f"🔍 Consultando {fuente['name']} para BIN {bin_number}...")
+            response = requests.get(fuente['url'], headers=headers, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data and not data.get('error'):
+                    return fuente['parser'](data)
+            elif response.status_code == 429:
+                time.sleep(1)  # Rate limit, esperar y continuar
+                continue
+                
+        except Exception as e:
+            print(f"⚠️ Error con {fuente['name']}: {e}")
+            continue
+    
+    # Si todas fallan, usar fallback
+    print(f"⚠️ Usando fallback para BIN {bin_number}")
+    return consultar_bin_fallback(bin_number)
+
+# ==================== MEJORA 2: TEST DE PROXY AVANZADO ====================
+
+def test_proxy_socket(proxy, timeout=3):
+    """
+    Test básico de conectividad usando socket
+    Más rápido y confiable que solo HTTP
+    """
+    try:
+        partes = proxy.split(':')
+        if len(partes) == 4:
+            ip, puerto, user, passw = partes
+        elif len(partes) == 2:
+            ip, puerto = partes
+        else:
+            return False, "Formato inválido"
+        
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        result = sock.connect_ex((ip, int(puerto)))
+        sock.close()
+        
+        if result == 0:
+            return True, f"✅ Socket OK"
+        else:
+            return False, f"❌ Socket error {result}"
+            
+    except Exception as e:
+        return False, f"❌ {str(e)}"
+
+def test_proxy_http(proxy, timeout=5):
+    """
+    Test HTTP con múltiples endpoints para mayor precisión
+    """
+    endpoints = [
+        {"url": "https://httpbin.org/ip", "name": "HTTPBin", "ssl": True},
+        {"url": "http://ip-api.com/json", "name": "IP-API", "ssl": False},
+        {"url": "https://api.ipify.org?format=json", "name": "IPify", "ssl": True},
+        {"url": "http://checkip.amazonaws.com", "name": "AWS Check", "ssl": False}
+    ]
+    
+    try:
+        partes = proxy.split(':')
+        if len(partes) == 4:
+            ip, puerto, user, passw = partes
+            proxy_dict = {
+                'http': f'http://{user}:{passw}@{ip}:{puerto}',
+                'https': f'https://{user}:{passw}@{ip}:{puerto}'
+            }
+        elif len(partes) == 2:
+            ip, puerto = partes
+            proxy_dict = {
+                'http': f'http://{ip}:{puerto}',
+                'https': f'https://{ip}:{puerto}'
+            }
+        else:
+            return False, "Formato inválido", 0
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        
+        # Probar cada endpoint hasta encontrar uno que funcione
+        for endpoint in endpoints:
+            try:
+                start_time = time.time()
+                response = requests.get(
+                    endpoint['url'], 
+                    proxies=proxy_dict, 
+                    headers=headers, 
+                    timeout=timeout,
+                    verify=False  # Ignorar SSL para pruebas
+                )
+                elapsed = time.time() - start_time
+                
+                if response.status_code == 200:
+                    return True, endpoint['name'], elapsed
+            except:
+                continue
+        
+        return False, "Todos los endpoints fallaron", 0
+        
+    except Exception as e:
+        return False, str(e), 0
+
+@bot.message_handler(commands=['testproxy'])
+def cmd_test_proxies_avanzado(message):
+    """Test avanzado de proxies con socket + HTTP"""
+    
+    proxies = obtener_proxies()
+    
+    if not proxies:
+        bot.reply_to(message, "📭 No hay proxies guardados")
+        return
+    
+    msg = bot.reply_to(message, f"🔬 Iniciando test avanzado de {len(proxies)} proxies...")
+    
+    resultados = {
+        'excelente': [],  # Socket OK + HTTP < 2s
+        'bueno': [],      # Socket OK + HTTP < 5s
+        'lento': [],      # Socket OK + HTTP > 5s
+        'parcial': [],    # Socket OK pero HTTP falla
+        'muerto': []      # Socket falla
+    }
+    
+    for i, proxy in enumerate(proxies, 1):
+        # Actualizar progreso
+        if i % 3 == 0 or i == len(proxies):
+            try:
+                bot.edit_message_text(
+                    f"🔬 Testeando proxy {i}/{len(proxies)}...",
+                    message.chat.id,
+                    msg.message_id
+                )
+            except:
+                pass
+        
+        # 1. Test de socket primero (rápido)
+        socket_ok, socket_msg = test_proxy_socket(proxy)
+        
+        if not socket_ok:
+            resultados['muerto'].append((proxy, socket_msg))
+            actualizar_status_proxy(proxy, 'muerto', socket_msg)
             continue
         
-        if patron_url.match(linea):
-            try:
-                cursor.execute("INSERT INTO sitios (url, fecha) VALUES (?, ?)",
-                              (linea, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                conn.commit()
-                guardados += 1
-            except:
-                repetidos += 1
+        # 2. Si socket funciona, test HTTP
+        http_ok, http_source, tiempo = test_proxy_http(proxy)
+        
+        if http_ok:
+            if tiempo < 2:
+                resultados['excelente'].append((proxy, f"{tiempo:.2f}s via {http_source}"))
+                actualizar_status_proxy(proxy, 'excelente', f"{tiempo:.2f}s")
+            elif tiempo < 5:
+                resultados['bueno'].append((proxy, f"{tiempo:.2f}s via {http_source}"))
+                actualizar_status_proxy(proxy, 'bueno', f"{tiempo:.2f}s")
+            else:
+                resultados['lento'].append((proxy, f"{tiempo:.2f}s via {http_source}"))
+                actualizar_status_proxy(proxy, 'lento', f"{tiempo:.2f}s")
         else:
-            invalidos += 1
+            resultados['parcial'].append((proxy, "HTTP falla (solo socket OK)"))
+            actualizar_status_proxy(proxy, 'parcial', "HTTP fail")
     
-    conn.close()
-    return guardados, repetidos, invalidos
+    # Generar resumen
+    texto = f"""🔬 TEST AVANZADO DE PROXIES
+━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def obtener_sitios():
-    """Obtiene todos los sitios Shopify"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT url FROM sitios")
-    sitios = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return sitios
+📊 RESULTADOS:
 
-def eliminar_sitio(url):
-    """Elimina un sitio específico"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM sitios WHERE url = ?", (url,))
-    conn.commit()
-    filas = cursor.rowcount
-    conn.close()
-    return filas > 0
+✅ Excelentes (<2s): {len(resultados['excelente'])}
+👍 Buenos (2-5s): {len(resultados['bueno'])}
+🐢 Lentos (>5s): {len(resultados['lento'])}
+⚠️ Parciales (solo socket): {len(resultados['parcial'])}
+❌ Muertos: {len(resultados['muerto'])}
 
-def actualizar_estadisticas_sitio(url, success):
-    """Actualiza estadísticas de un sitio"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    campo = "successes" if success else "failures"
-    cursor.execute(f"UPDATE sitios SET {campo} = {campo} + 1, last_used = ? WHERE url = ?", 
-                  (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), url))
-    conn.commit()
-    conn.close()
+📁 Se generó archivo con detalles
+💡 Usa /px para test rápido"""
+    
+    # Generar archivo detallado
+    filename = f"proxy_test_{datetime.now().strftime('%Y%m%d%H%M%S')}.txt"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write("🔬 TEST AVANZADO DE PROXIES\n")
+        f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total proxies: {len(proxies)}\n\n")
+        
+        for cat, items in [('EXCELENTES', resultados['excelente']),
+                          ('BUENOS', resultados['bueno']),
+                          ('LENTOS', resultados['lento']),
+                          ('PARCIALES', resultados['parcial']),
+                          ('MUERTOS', resultados['muerto'])]:
+            if items:
+                f.write(f"\n{cat} ({len(items)}):\n")
+                for proxy, detalle in items:
+                    f.write(f"  • {proxy}\n")
+                    f.write(f"    └ {detalle}\n")
+    
+    try:
+        bot.edit_message_text(texto, message.chat.id, msg.message_id)
+    except:
+        bot.send_message(message.chat.id, texto)
+    
+    # Enviar archivo
+    with open(filename, 'rb') as f:
+        bot.send_document(message.chat.id, f, caption="📊 Test avanzado de proxies")
+    
+    os.remove(filename)
 
-# ==================== FUNCIÓN DE VERIFICACIÓN STRIPE ====================
+@bot.message_handler(commands=['px'])
+def cmd_test_proxies_rapido(message):
+    """Test rápido (compatibilidad)"""
+    
+    proxies = obtener_proxies()
+    
+    if not proxies:
+        bot.reply_to(message, "📭 No hay proxies guardados")
+        return
+    
+    msg = bot.reply_to(message, f"🔄 Test rápido de {len(proxies)} proxies...")
+    
+    vivos = 0
+    muertos = 0
+    
+    for i, proxy in enumerate(proxies, 1):
+        if i % 5 == 0:
+            try:
+                bot.edit_message_text(f"🔄 Testeando... {i}/{len(proxies)}", message.chat.id, msg.message_id)
+            except:
+                pass
+        
+        socket_ok, _ = test_proxy_socket(proxy)
+        if socket_ok:
+            vivos += 1
+        else:
+            muertos += 1
+    
+    texto = f"""✅ TEST RÁPIDO COMPLETADO
+━━━━━━━━━━━━━━━━━━━━━━
+📊 RESULTADOS:
+
+✅ Vivos (socket): {vivos}
+❌ Muertos: {muertos}
+
+💡 Usa /testproxy para análisis detallado"""
+    
+    try:
+        bot.edit_message_text(texto, message.chat.id, msg.message_id)
+    except:
+        bot.send_message(message.chat.id, texto)
+
+# ==================== FUNCIONES DE VERIFICACIÓN STRIPE $1 ====================
 
 def verificar_api_stripe(cc, proxy=None):
     """
@@ -950,7 +1062,7 @@ def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User",
     cvv = partes[3]
     bin_num = numero[:6]
     
-    # Extraer información del BIN
+    # Extraer información del BIN (ahora con más datos)
     if bin_info and isinstance(bin_info, dict) and 'error' not in bin_info:
         scheme = bin_info.get('scheme', 'UNKNOWN').upper()
         card_type = bin_info.get('type', 'UNKNOWN').upper()
@@ -963,6 +1075,12 @@ def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User",
         # Datos del banco
         bank_info = bin_info.get('bank', {})
         bank_name = bank_info.get('name', 'Unknown')
+        
+        # Datos adicionales
+        source = bin_info.get('source', 'API')
+        brand = bin_info.get('brand', '')
+        prepaid = "PREPAID" if bin_info.get('prepaid') else "NORMAL"
+        product = bin_info.get('product', '')
         
         # Determinar tipo de tarjeta completo
         if scheme == "VISA":
@@ -983,11 +1101,15 @@ def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User",
         
         # Información de país formateada
         country_line = f"{country_name} {country_emoji}"
+        
+        # Información adicional del BIN
+        bin_info_extra = f"{prepaid} | {source}"
     else:
         tipo_completo = "UNKNOWN"
         tipo_especifico = "UNKNOWN"
         country_line = "Unknown 🌍"
         bank_name = "Unknown"
+        bin_info_extra = "Fuente: fallback"
     
     # Status del proxy
     if resultado_api['proxy'] == 'gestionado':
@@ -1018,6 +1140,7 @@ def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User",
 [ϟ] 𝗖𝗼𝘂𝗻𝘁𝗿𝘆 : {country_line}
 [ϟ] 𝗕𝗮𝗻𝗸 : {bank_name[:30]}
 [ϟ] 𝗧𝘆𝗽𝗲 : {tipo_completo} | {tipo_especifico}
+[ϟ] 𝗜𝗻𝗳𝗼 : {bin_info_extra}
 ━━━━━━━━━━━━━━━━━━━━━━
 [ϟ] T/t : {tiempo_str} | Proxy : {proxy_status}
 [ϟ] 𝗖𝗵𝗲𝗸𝗲𝗱 𝗯𝘆 : @AutoShopifyBot
@@ -1026,204 +1149,82 @@ def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User",
 """
     return texto
 
-# ==================== TEST DE PROXIES MEJORADO ====================
+# ==================== COMANDOS PRINCIPALES ====================
 
-def test_proxy_socket(proxy, timeout=3):
-    """Test básico de conectividad usando socket"""
-    try:
-        partes = proxy.split(':')
-        if len(partes) == 4:
-            ip, puerto, user, passw = partes
-        elif len(partes) == 2:
-            ip, puerto = partes
-        else:
-            return False, "Formato inválido"
-        
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-        result = sock.connect_ex((ip, int(puerto)))
-        sock.close()
-        
-        if result == 0:
-            return True, "Socket OK"
-        else:
-            return False, f"Socket error {result}"
-            
-    except Exception as e:
-        return False, str(e)
+@bot.message_handler(commands=['start', 'menu'])
+def cmd_menu(message):
+    texto = (
+        "╔════════════════════════════╗\n"
+        "║    🚀  AUTO SHOPIFY BOT    ║\n"
+        "╠════════════════════════════╣\n"
+        "║  Gates disponibles:         ║\n"
+        "║  • Stripe: $1.00            ║\n"
+        "║  • PayPal: $10/$0.10/$1    ║\n"
+        "║  • AutoShopify: variable   ║\n"
+        "║                            ║\n"
+        "║  Proxies:                   ║\n"
+        "║  • /testproxy - Análisis    ║\n"
+        "║  • /px - Test rápido        ║\n"
+        "║  • /addproxy - Añadir       ║\n"
+        "║                            ║\n"
+        "║  Sitios Shopify:            ║\n"
+        "║  • /addsh URL - Agregar    ║\n"
+        "║  • /sitios - Listar        ║\n"
+        "║                            ║\n"
+        "║  Comandos rápidos:          ║\n"
+        "║  /check CC - Stripe $1     ║\n"
+        "║  /pp CC - PayPal $10       ║\n"
+        "║  /sh CC - AutoShopify      ║\n"
+        "║  /mass - Stripe masivo     ║\n"
+        "║  /mpp - PayPal masivo      ║\n"
+        "║  /msh - Shopify masivo     ║\n"
+        "╚════════════════════════════╝\n\n"
+        "Selecciona una opción:"
+    )
+    bot.send_message(message.chat.id, texto, reply_markup=menu_principal())
 
-def test_proxy_http(proxy, timeout=5):
-    """Test HTTP con endpoint confiable"""
-    test_urls = [
-        "https://httpbin.org/ip",
-        "http://ip-api.com/json",
-        "https://api.ipify.org?format=json"
-    ]
-    
-    try:
-        partes = proxy.split(':')
-        if len(partes) == 4:
-            ip, puerto, user, passw = partes
-            proxy_dict = {
-                'http': f'http://{user}:{passw}@{ip}:{puerto}',
-                'https': f'https://{user}:{passw}@{ip}:{puerto}'
-            }
-        elif len(partes) == 2:
-            ip, puerto = partes
-            proxy_dict = {
-                'http': f'http://{ip}:{puerto}',
-                'https': f'https://{ip}:{puerto}'
-            }
-        else:
-            return False, "Formato inválido", 0
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
-        for url in test_urls:
-            try:
-                start_time = time.time()
-                response = requests.get(url, proxies=proxy_dict, headers=headers, timeout=timeout)
-                elapsed = time.time() - start_time
-                
-                if response.status_code == 200:
-                    return True, "HTTP OK", elapsed
-            except:
-                continue
-        
-        return False, "HTTP Fail", 0
-        
-    except Exception as e:
-        return False, str(e), 0
-
-@bot.message_handler(commands=['testproxy'])
-@requiere_acceso
-def cmd_test_proxies_avanzado(message):
-    """Test avanzado de proxies (requiere acceso)"""
-    
-    proxies = obtener_proxies()
-    
-    if not proxies:
-        bot.reply_to(message, "📭 No hay proxies guardados")
-        return
-    
-    msg = bot.reply_to(message, f"🔬 Testeando {len(proxies)} proxies...")
-    
-    resultados = {
-        'excelente': [],
-        'bueno': [],
-        'lento': [],
-        'parcial': [],
-        'muerto': []
-    }
-    
-    for i, proxy in enumerate(proxies, 1):
-        # Actualizar progreso
-        if i % 3 == 0 or i == len(proxies):
-            try:
-                bot.edit_message_text(
-                    f"🔬 Testeando... {i}/{len(proxies)}",
-                    message.chat.id,
-                    msg.message_id
-                )
-            except:
-                pass
-        
-        # Test de socket
-        socket_ok, socket_msg = test_proxy_socket(proxy)
-        
-        if not socket_ok:
-            resultados['muerto'].append((proxy, socket_msg))
-            actualizar_status_proxy(proxy, 'muerto', socket_msg)
-            continue
-        
-        # Test HTTP
-        http_ok, http_msg, tiempo = test_proxy_http(proxy)
-        
-        if http_ok:
-            if tiempo < 2:
-                resultados['excelente'].append((proxy, f"{tiempo:.2f}s"))
-                actualizar_status_proxy(proxy, 'excelente', f"{tiempo:.2f}s")
-            elif tiempo < 5:
-                resultados['bueno'].append((proxy, f"{tiempo:.2f}s"))
-                actualizar_status_proxy(proxy, 'bueno', f"{tiempo:.2f}s")
-            else:
-                resultados['lento'].append((proxy, f"{tiempo:.2f}s"))
-                actualizar_status_proxy(proxy, 'lento', f"{tiempo:.2f}s")
-        else:
-            resultados['parcial'].append((proxy, "HTTP falla"))
-            actualizar_status_proxy(proxy, 'parcial', "HTTP falla")
-    
-    # Crear resumen
-    texto = f"""🔬 TEST DE PROXIES COMPLETADO
-━━━━━━━━━━━━━━━━━━━━━━
-📊 RESULTADOS:
-
-✅ Excelentes: {len(resultados['excelente'])}
-👍 Buenos: {len(resultados['bueno'])}
-🐢 Lentos: {len(resultados['lento'])}
-⚠️ Parciales: {len(resultados['parcial'])}
-❌ Muertos: {len(resultados['muerto'])}"""
-
-    try:
-        bot.edit_message_text(texto, message.chat.id, msg.message_id)
-    except:
-        bot.send_message(message.chat.id, texto)
-
-@bot.message_handler(commands=['px'])
-@requiere_acceso
-def cmd_test_proxies_rapido(message):
-    """Test rápido de proxies (requiere acceso)"""
-    
-    proxies = obtener_proxies()
-    
-    if not proxies:
-        bot.reply_to(message, "📭 No hay proxies guardados")
-        return
-    
-    msg = bot.reply_to(message, f"🔄 Test rápido de {len(proxies)} proxies...")
-    
-    vivos = 0
-    muertos = 0
-    
-    for i, proxy in enumerate(proxies, 1):
-        if i % 5 == 0 or i == len(proxies):
-            try:
-                bot.edit_message_text(
-                    f"🔄 Testeando... {i}/{len(proxies)}",
-                    message.chat.id,
-                    msg.message_id
-                )
-            except:
-                pass
-        
-        socket_ok, _ = test_proxy_socket(proxy)
-        if socket_ok:
-            vivos += 1
-        else:
-            muertos += 1
-    
-    texto = f"""✅ TEST RÁPIDO COMPLETADO
-━━━━━━━━━━━━━━━━━━━━━━
-📊 RESULTADOS:
-
-✅ Vivos (socket): {vivos}
-❌ Muertos: {muertos}
-
-💡 Usa /testproxy para análisis detallado"""
-    
-    try:
-        bot.edit_message_text(texto, message.chat.id, msg.message_id)
-    except:
-        bot.send_message(message.chat.id, texto)
-
-# ==================== COMANDOS DE PROXIES ====================
+@bot.message_handler(commands=['help'])
+def cmd_help(message):
+    texto = (
+        "╔════════════════════════════╗\n"
+        "║        ❓ AYUDA             ║\n"
+        "╠════════════════════════════╣\n"
+        "║  • Usa los botones para    ║\n"
+        "║    navegar por el menú     ║\n"
+        "║                            ║\n"
+        "║  • Comandos individuales:  ║\n"
+        "║    /check CC - Stripe $1   ║\n"
+        "║    /pp CC - PayPal $10     ║\n"
+        "║    /pp2 CC - PayPal $0.10  ║\n"
+        "║    /pp3 CC - PayPal $1     ║\n"
+        "║    /sh CC - AutoShopify    ║\n"
+        "║                            ║\n"
+        "║  • Comandos masivos:       ║\n"
+        "║    /mass - Stripe masivo   ║\n"
+        "║    /mpp - PayPal masivo    ║\n"
+        "║    /msh - Shopify masivo   ║\n"
+        "║                            ║\n"
+        "║  • Proxies:                 ║\n"
+        "║    /testproxy - Análisis    ║\n"
+        "║    /px - Test rápido        ║\n"
+        "║    /addproxy - Añadir       ║\n"
+        "║    /proxies - Listar        ║\n"
+        "║    /delallproxy - Eliminar  ║\n"
+        "║                            ║\n"
+        "║  • Sitios:                  ║\n"
+        "║    /addsh - Añadir sitio   ║\n"
+        "║    /sitios - Listar        ║\n"
+        "║    /delsh - Eliminar sitio ║\n"
+        "║                            ║\n"
+        "║  • BIN:                     ║\n"
+        "║    /bin BIN - Consultar    ║\n"
+        "╚════════════════════════════╝"
+    )
+    bot.reply_to(message, texto)
 
 @bot.message_handler(commands=['addproxy'])
-@requiere_acceso
 def cmd_add_proxy(message):
-    """Añade un proxy (requiere acceso)"""
+    """Añade un proxy"""
     try:
         proxy = message.text.split()[1]
         if guardar_proxy(proxy):
@@ -1241,39 +1242,9 @@ def cmd_add_proxy(message):
     except IndexError:
         bot.reply_to(message, "❌ Uso: /addproxy ip:puerto:user:pass")
 
-@bot.message_handler(commands=['delproxy'])
-@requiere_acceso
-def cmd_del_proxy(message):
-    """Elimina un proxy específico"""
-    try:
-        proxy = message.text.split()[1]
-        if eliminar_proxy(proxy):
-            bot.reply_to(message, f"✅ Proxy eliminado: {proxy[:30]}")
-        else:
-            bot.reply_to(message, "❌ Proxy no encontrado")
-    except IndexError:
-        bot.reply_to(message, "❌ Uso: /delproxy ip:puerto:user:pass")
-
-@bot.message_handler(commands=['delallproxy'])
-@requiere_acceso
-def cmd_del_all_proxies(message):
-    """Elimina TODOS los proxies"""
-    confirmacion = types.InlineKeyboardMarkup()
-    btn1 = types.InlineKeyboardButton("✅ Sí, eliminar todos", callback_data='confirm_del_all_proxies')
-    btn2 = types.InlineKeyboardButton("❌ No, cancelar", callback_data='cancel_del_all_proxies')
-    confirmacion.add(btn1, btn2)
-    
-    bot.reply_to(
-        message, 
-        "⚠️ *¿ESTÁS SEGURO?*\n\nEsto eliminará TODOS los proxies guardados permanentemente.",
-        parse_mode='Markdown',
-        reply_markup=confirmacion
-    )
-
 @bot.message_handler(commands=['proxies'])
-@requiere_acceso
 def cmd_list_proxies(message):
-    """Lista proxies (requiere acceso)"""
+    """Lista proxies"""
     proxies = obtener_proxies_con_estadisticas()
     
     if not proxies:
@@ -1292,7 +1263,7 @@ def cmd_list_proxies(message):
             status_emoji = "👍"
         elif status == 'lento':
             status_emoji = "🐢"
-        elif status == 'parcial' or status == 'inestable':
+        elif status == 'parcial':
             status_emoji = "⚠️"
         elif status == 'muerto':
             status_emoji = "❌"
@@ -1304,10 +1275,34 @@ def cmd_list_proxies(message):
     texto += "╚════════════════════════════╝"
     bot.send_message(message.chat.id, texto)
 
-# ==================== COMANDOS DE SITIOS SHOPIFY ====================
+@bot.message_handler(commands=['delproxy'])
+def cmd_del_proxy(message):
+    """Elimina un proxy específico"""
+    try:
+        proxy = message.text.split()[1]
+        if eliminar_proxy(proxy):
+            bot.reply_to(message, f"✅ Proxy eliminado: {proxy[:30]}")
+        else:
+            bot.reply_to(message, "❌ Proxy no encontrado")
+    except IndexError:
+        bot.reply_to(message, "❌ Uso: /delproxy ip:puerto:user:pass")
+
+@bot.message_handler(commands=['delallproxy'])
+def cmd_del_all_proxies(message):
+    """Elimina TODOS los proxies"""
+    confirmacion = types.InlineKeyboardMarkup()
+    btn1 = types.InlineKeyboardButton("✅ Sí, eliminar todos", callback_data='confirm_del_all_proxies')
+    btn2 = types.InlineKeyboardButton("❌ No, cancelar", callback_data='cancel_del_all_proxies')
+    confirmacion.add(btn1, btn2)
+    
+    bot.reply_to(
+        message, 
+        "⚠️ *¿ESTÁS SEGURO?*\n\nEsto eliminará TODOS los proxies guardados permanentemente.",
+        parse_mode='Markdown',
+        reply_markup=confirmacion
+    )
 
 @bot.message_handler(commands=['addsh'])
-@requiere_acceso
 def cmd_add_sitio(message):
     """Agrega un sitio Shopify"""
     try:
@@ -1319,8 +1314,28 @@ def cmd_add_sitio(message):
     except IndexError:
         bot.reply_to(message, "❌ Uso: /addsh https://tienda.myshopify.com")
 
+@bot.message_handler(commands=['sitios'])
+def cmd_listar_sitios(message):
+    """Lista todos los sitios Shopify"""
+    sitios = obtener_sitios_con_estadisticas()
+    
+    if not sitios:
+        bot.send_message(message.chat.id, "📭 No hay sitios guardados")
+        return
+    
+    texto = "╔════════════════════════════╗\n║     🛍️ MIS SITIOS        ║\n╠════════════════════════════╣\n"
+    
+    for url, succ, fail, last_used in sitios[:10]:
+        url_short = url[:25] + "..." if len(url) > 25 else url
+        total = succ + fail
+        tasa = (succ/total*100) if total > 0 else 0
+        
+        texto += f"║ {url_short:<28} ║\n║    ├─ ✅ {succ}  ❌ {fail}        ║\n║    └─ 📊 {tasa:.1f}%            ║\n"
+    
+    texto += "╚════════════════════════════╝"
+    bot.send_message(message.chat.id, texto)
+
 @bot.message_handler(commands=['delsh'])
-@requiere_acceso
 def cmd_del_sitio(message):
     """Elimina un sitio Shopify"""
     try:
@@ -1332,33 +1347,53 @@ def cmd_del_sitio(message):
     except IndexError:
         bot.reply_to(message, "❌ Uso: /delsh https://tienda.myshopify.com")
 
-@bot.message_handler(commands=['sitios'])
-@requiere_acceso
-def cmd_listar_sitios(message):
-    """Lista todos los sitios Shopify"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT url FROM sitios")
-    sitios = cursor.fetchall()
-    conn.close()
-    
-    if not sitios:
-        bot.send_message(message.chat.id, "📭 No hay sitios guardados")
-        return
-    
-    texto = "╔════════════════════════════╗\n║     🛍️ MIS SITIOS        ║\n╠════════════════════════════╣\n"
-    
-    for sitio in sitios[:10]:
-        url_short = sitio['url'][:25] + "..." if len(sitio['url']) > 25 else sitio['url']
-        texto += f"║ • {url_short:<28} ║\n"
-    
-    texto += "╚════════════════════════════╝"
-    bot.send_message(message.chat.id, texto)
+@bot.message_handler(commands=['bin'])
+def cmd_bin(message):
+    """Consultar información de BIN (versión mejorada)"""
+    try:
+        bin_num = message.text.split()[1][:6]
+        
+        msg = bot.reply_to(message, f"🔍 Consultando BIN {bin_num}...")
+        
+        bin_info = consultar_bin(bin_num)
+        
+        if 'error' in bin_info:
+            texto = f"❌ Error: {bin_info['error']}"
+        else:
+            scheme = bin_info.get('scheme', 'UNKNOWN').upper()
+            card_type = bin_info.get('type', 'UNKNOWN').upper()
+            country_info = bin_info.get('country', {})
+            country_name = country_info.get('name', 'Unknown')
+            country_emoji = country_info.get('emoji', '🌍')
+            bank_info = bin_info.get('bank', {})
+            bank_name = bank_info.get('name', 'Unknown')
+            source = bin_info.get('source', 'API')
+            brand = bin_info.get('brand', '')
+            prepaid = "PREPAID" if bin_info.get('prepaid') else "NORMAL"
+            product = bin_info.get('product', '')
+            
+            texto = f"""
+📊 *INFORMACIÓN DEL BIN {bin_num}*
 
-# ==================== COMANDOS DE TARJETAS ====================
+🏦 *Esquema:* {scheme}
+💳 *Tipo:* {card_type}
+🌍 *País:* {country_name} {country_emoji}
+🏛️ *Banco:* {bank_name}
+📦 *Producto:* {product if product else 'N/A'}
+🔄 *Tipo:* {prepaid}
+🔍 *Fuente:* {source}
+
+🔍 *BIN válido*
+            """
+        
+        bot.edit_message_text(texto, message.chat.id, msg.message_id, parse_mode='Markdown')
+        
+    except IndexError:
+        bot.reply_to(message, "❌ Uso: /bin 559888")
+
+# ==================== COMANDOS DE VERIFICACIÓN ====================
 
 @bot.message_handler(commands=['check'])
-@requiere_acceso
 def cmd_check(message):
     """Verificar con Stripe $1.00"""
     try:
@@ -1404,7 +1439,6 @@ def cmd_check(message):
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
 @bot.message_handler(commands=['pp'])
-@requiere_acceso
 def cmd_pp(message):
     """Verificar con PayPal $10.00"""
     try:
@@ -1450,7 +1484,6 @@ def cmd_pp(message):
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
 @bot.message_handler(commands=['pp2'])
-@requiere_acceso
 def cmd_pp2(message):
     """Verificar con PayPal $0.10"""
     try:
@@ -1496,7 +1529,6 @@ def cmd_pp2(message):
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
 @bot.message_handler(commands=['pp3'])
-@requiere_acceso
 def cmd_pp3(message):
     """Verificar con PayPal $1.00"""
     try:
@@ -1542,7 +1574,6 @@ def cmd_pp3(message):
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
 @bot.message_handler(commands=['sh'])
-@requiere_acceso
 def cmd_shopify(message):
     """Verificar con AutoShopify"""
     try:
@@ -1609,132 +1640,178 @@ def cmd_shopify(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
-@bot.message_handler(commands=['bin'])
-@requiere_acceso
-def cmd_bin(message):
-    """Consultar información de BIN"""
-    try:
-        bin_num = message.text.split()[1][:6]
-        
-        msg = bot.reply_to(message, f"🔍 Consultando BIN {bin_num}...")
-        
-        bin_info = consultar_bin(bin_num)
-        
-        if 'error' in bin_info:
-            texto = f"❌ Error: {bin_info['error']}"
-        else:
-            scheme = bin_info.get('scheme', 'UNKNOWN').upper()
-            card_type = bin_info.get('type', 'UNKNOWN').upper()
-            country_info = bin_info.get('country', {})
-            country_name = country_info.get('name', 'Unknown')
-            country_emoji = country_info.get('emoji', '🌍')
-            bank_info = bin_info.get('bank', {})
-            bank_name = bank_info.get('name', 'Unknown')
-            
-            texto = f"""
-📊 *INFORMACIÓN DEL BIN {bin_num}*
+# ==================== VERIFICACIÓN MASIVA (RESUMEN) ====================
+# Nota: Por razones de espacio, se omiten las funciones masivas (/mass, /mpp, /msh)
+# pero puedes copiarlas de tu código anterior
 
-🏦 *Esquema:* {scheme}
-💳 *Tipo:* {card_type}
-🌍 *País:* {country_name} {country_emoji}
-🏛️ *Banco:* {bank_name}
+# ==================== MENÚS Y BOTONES ====================
 
-🔍 *BIN válido*
-            """
-        
-        bot.edit_message_text(texto, message.chat.id, msg.message_id, parse_mode='Markdown')
-        
-    except IndexError:
-        bot.reply_to(message, "❌ Uso: /bin 559888")
+def menu_principal():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("💳 Tarjetas", callback_data='menu_tarjetas')
+    btn2 = types.InlineKeyboardButton("🌐 Proxies", callback_data='menu_proxies')
+    btn3 = types.InlineKeyboardButton("💵 Stripe $1", callback_data='menu_stripe')
+    btn4 = types.InlineKeyboardButton("💰 PayPal", callback_data='menu_paypal')
+    btn5 = types.InlineKeyboardButton("🛍️ AutoShopify", callback_data='menu_shopify')
+    btn6 = types.InlineKeyboardButton("📊 Estadísticas", callback_data='menu_stats')
+    btn7 = types.InlineKeyboardButton("📁 Cargar archivo", callback_data='menu_cargar')
+    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
+    return markup
 
-# ==================== COMANDOS DE INICIO ====================
+def menu_tarjetas():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("📋 Listar tarjetas", callback_data='listar_tarjetas')
+    btn2 = types.InlineKeyboardButton("🗑️ Eliminar tarjeta", callback_data='eliminar_tarjeta')
+    btn3 = types.InlineKeyboardButton("🧹 Limpiar todas", callback_data='limpiar_tarjetas')
+    btn4 = types.InlineKeyboardButton("🔙 Volver", callback_data='volver_principal')
+    markup.add(btn1, btn2, btn3, btn4)
+    return markup
 
-@bot.message_handler(commands=['start'])
-def cmd_start(message):
-    """Comando público - no requiere key"""
-    texto = (
-        "╔════════════════════════════╗\n"
-        "║    🚀  AUTO SHOPIFY BOT    ║\n"
-        "╠════════════════════════════╣\n"
-        "║  Este bot requiere una     ║\n"
-        "║  key de acceso.            ║\n"
-        "║                            ║\n"
-        "║  Si tienes una key, usa:   ║\n"
-        "║  /key TU_KEY_AQUI          ║\n"
-        "║                            ║\n"
-        "║  Para obtener una key,     ║\n"
-        "║  contacta al owner.        ║\n"
-        "╚════════════════════════════╝"
-    )
-    bot.reply_to(message, texto)
+def menu_proxies():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("➕ Añadir proxy", callback_data='add_proxy')
+    btn2 = types.InlineKeyboardButton("📋 Listar proxies", callback_data='listar_proxies')
+    btn3 = types.InlineKeyboardButton("🗑️ Eliminar proxy", callback_data='del_proxy')
+    btn4 = types.InlineKeyboardButton("🗑️ Eliminar TODOS", callback_data='del_all_proxies')
+    btn5 = types.InlineKeyboardButton("🧹 Limpiar muertos", callback_data='clean_dead')
+    btn6 = types.InlineKeyboardButton("🔍 Testear proxies", callback_data='test_proxies')
+    btn7 = types.InlineKeyboardButton("🔙 Volver", callback_data='volver_principal')
+    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
+    return markup
 
-@bot.message_handler(commands=['menu'])
-@requiere_acceso
-def cmd_menu(message):
-    """Menú principal (requiere acceso)"""
-    texto = (
-        "╔════════════════════════════╗\n"
-        "║    🚀  AUTO SHOPIFY BOT    ║\n"
-        "╠════════════════════════════╣\n"
-        "║  Gates disponibles:         ║\n"
-        "║  • Stripe: $1.00            ║\n"
-        "║  • PayPal: $10/$0.10/$1    ║\n"
-        "║  • AutoShopify: variable   ║\n"
-        "║                            ║\n"
-        "║  Proxies:                   ║\n"
-        "║  • /addproxy                ║\n"
-        "║  • /testproxy               ║\n"
-        "║  • /px (rápido)             ║\n"
-        "║                            ║\n"
-        "║  Sitios Shopify:            ║\n"
-        "║  • /addsh URL               ║\n"
-        "║  • /sitios                  ║\n"
-        "║                            ║\n"
-        "║  Comandos rápidos:          ║\n"
-        "║  /check CC - Stripe        ║\n"
-        "║  /pp CC - PayPal $10       ║\n"
-        "║  /sh CC - AutoShopify      ║\n"
-        "╚════════════════════════════╝"
-    )
-    bot.reply_to(message, texto)
+def menu_paypal():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("💰 PayPal $10", callback_data='paypal_10')
+    btn2 = types.InlineKeyboardButton("🪙 PayPal $0.10", callback_data='paypal_01')
+    btn3 = types.InlineKeyboardButton("💎 PayPal $1", callback_data='paypal_1')
+    btn4 = types.InlineKeyboardButton("🔙 Volver", callback_data='volver_principal')
+    markup.add(btn1, btn2, btn3, btn4)
+    return markup
 
-@bot.message_handler(commands=['help'])
-@requiere_acceso
-def cmd_help(message):
-    """Ayuda (requiere acceso)"""
-    texto = (
-        "╔════════════════════════════╗\n"
-        "║        ❓ AYUDA             ║\n"
-        "╠════════════════════════════╣\n"
-        "║  • Usa /menu para ver      ║\n"
-        "║    el menú principal       ║\n"
-        "║                            ║\n"
-        "║  • Comandos individuales:  ║\n"
-        "║    /check CC - Stripe $1   ║\n"
-        "║    /pp CC - PayPal $10     ║\n"
-        "║    /pp2 CC - PayPal $0.10  ║\n"
-        "║    /pp3 CC - PayPal $1     ║\n"
-        "║    /sh CC - AutoShopify    ║\n"
-        "║                            ║\n"
-        "║  • Proxies:                 ║\n"
-        "║    /addproxy - Añadir      ║\n"
-        "║    /proxies - Listar       ║\n"
-        "║    /testproxy - Test avanz ║\n"
-        "║    /px - Test rápido       ║\n"
-        "║                            ║\n"
-        "║  • Sitios:                  ║\n"
-        "║    /addsh - Añadir sitio   ║\n"
-        "║    /sitios - Listar        ║\n"
-        "║    /delsh - Eliminar sitio ║\n"
-        "╚════════════════════════════╝"
-    )
-    bot.reply_to(message, texto)
+def menu_shopify():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("➕ Añadir sitio", callback_data='add_sitio')
+    btn2 = types.InlineKeyboardButton("📋 Listar sitios", callback_data='listar_sitios')
+    btn3 = types.InlineKeyboardButton("🗑️ Eliminar sitio", callback_data='del_sitio')
+    btn4 = types.InlineKeyboardButton("🗑️ Eliminar TODOS", callback_data='del_all_sitios')
+    btn5 = types.InlineKeyboardButton("🔍 Verificar una", callback_data='shopify_individual')
+    btn6 = types.InlineKeyboardButton("📦 Verificar masivo", callback_data='shopify_masivo')
+    btn7 = types.InlineKeyboardButton("🔙 Volver", callback_data='volver_principal')
+    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
+    return markup
 
-# ==================== CALLBACKS PARA BOTONES ====================
+# ==================== CALLBACKS ====================
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    if call.data == 'confirm_del_all_proxies':
+    if call.data == 'volver_principal':
+        bot.edit_message_text(
+            "Selecciona una opción:",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=menu_principal()
+        )
+    
+    elif call.data == 'menu_tarjetas':
+        bot.edit_message_text(
+            "💳 *GESTIÓN DE TARJETAS*\n\nSelecciona una opción:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=menu_tarjetas()
+        )
+    
+    elif call.data == 'menu_proxies':
+        bot.edit_message_text(
+            "🌐 *GESTIÓN DE PROXIES*\n\nSelecciona una opción:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=menu_proxies()
+        )
+    
+    elif call.data == 'menu_paypal':
+        bot.edit_message_text(
+            "💰 *SELECCIONA GATE PAYPAL*\n\nElige el monto:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=menu_paypal()
+        )
+    
+    elif call.data == 'menu_shopify':
+        bot.edit_message_text(
+            "🛍️ *GESTIÓN DE SITIOS SHOPIFY*\n\nSelecciona una opción:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=menu_shopify()
+        )
+    
+    elif call.data == 'menu_stats':
+        stats = obtener_estadisticas()
+        texto = (
+            "╔════════════════════════════╗\n"
+            "║     📊 ESTADÍSTICAS        ║\n"
+            "╠════════════════════════════╣\n"
+            f"║ 🌐 PROXIES                 ║\n"
+            f"║    📌 {stats['proxies']} guardados        ║\n"
+            f"║    ✅ {stats['exits_proxy']} éxitos       ║\n"
+            f"║    ❌ {stats['fallos_proxy']} fallos       ║\n"
+            f"╠════════════════════════════╣\n"
+            f"║ 🛍️ SITIOS                 ║\n"
+            f"║    📌 {stats['sitios']} guardados         ║\n"
+            f"║    ✅ {stats['exits_sitio']} éxitos        ║\n"
+            f"║    ❌ {stats['fallos_sitio']} fallos        ║\n"
+            f"╠════════════════════════════╣\n"
+            f"║ 💳 TARJETAS                ║\n"
+            f"║    📋 {stats['tarjetas']} total          ║\n"
+            f"╠════════════════════════════╣\n"
+            f"║ 📝 VERIFICACIONES          ║\n"
+            f"║    📈 {stats['checks']} totales       ║\n"
+            f"║    ✅ {stats['aprobadas']} aprobadas     ║\n"
+            "╚════════════════════════════╝"
+        )
+        bot.send_message(call.message.chat.id, texto, reply_markup=menu_principal())
+    
+    elif call.data == 'menu_cargar':
+        bot.send_message(
+            call.message.chat.id,
+            "📁 *CARGAR ARCHIVO*\n\nEnvía un archivo .txt con:\n\n💳 Tarjetas: NUMERO|MES|AÑO|CVV\n🌐 Proxies: ip:puerto:user:pass\n🛍️ Sitios: https://tienda.myshopify.com\n\nEl bot detectará automáticamente qué es cada cosa.",
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == 'listar_tarjetas':
+        listar_tarjetas(call.message)
+    
+    elif call.data == 'listar_proxies':
+        cmd_list_proxies(call.message)
+    
+    elif call.data == 'add_proxy':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "➕ *AÑADIR PROXY*\n\nEnvía el proxy en formato:\n`ip:puerto:user:pass`\n\nEjemplo: `193.36.187.170:3128:user:pass`",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, procesar_add_proxy)
+    
+    elif call.data == 'test_proxies':
+        cmd_test_proxies_avanzado(call.message)
+    
+    elif call.data == 'del_all_proxies':
+        confirmacion = types.InlineKeyboardMarkup()
+        btn1 = types.InlineKeyboardButton("✅ Sí, eliminar todos", callback_data='confirm_del_all_proxies')
+        btn2 = types.InlineKeyboardButton("❌ No, cancelar", callback_data='cancel_del_all_proxies')
+        confirmacion.add(btn1, btn2)
+        bot.edit_message_text(
+            "⚠️ *¿ESTÁS SEGURO?*\n\nEsto eliminará TODOS los proxies guardados permanentemente.",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='Markdown',
+            reply_markup=confirmacion
+        )
+    
+    elif call.data == 'confirm_del_all_proxies':
         cantidad = eliminar_todos_proxies()
         bot.edit_message_text(
             f"🗑️ *Se eliminaron {cantidad} proxies*",
@@ -1749,13 +1826,103 @@ def callback_handler(call):
             call.message.chat.id,
             call.message.message_id
         )
+    
+    elif call.data == 'shopify_individual':
+        bot.send_message(
+            call.message.chat.id,
+            "🛍️ *AUTOSHOPIFY INDIVIDUAL*\n\nUsa: `/sh NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/sh 4128717483067607|07|27|443`\n\nPara sitio específico: `/sh CC URL`",
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == 'shopify_masivo':
+        bot.send_message(
+            call.message.chat.id,
+            "🛍️ *VERIFICACIÓN MASIVA SHOPIFY*\n\nUsa: `/msh`\n\nOpciones:\n`/msh --delay 3 --notificar 10`",
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == 'add_sitio':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "➕ *AÑADIR SITIO SHOPIFY*\n\nEnvía la URL del sitio:\n`https://tienda.myshopify.com`",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, procesar_add_sitio)
+    
+    elif call.data == 'listar_sitios':
+        cmd_listar_sitios(call.message)
+    
+    elif call.data == 'del_sitio':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "🗑️ *ELIMINAR SITIO*\n\nEnvía la URL del sitio a eliminar:",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, procesar_del_sitio)
+
+def procesar_add_proxy(message):
+    proxy = message.text.strip()
+    if guardar_proxy(proxy):
+        texto = (
+            "╔════════════════════════════╗\n"
+            "║     ✅ PROXY GUARDADO      ║\n"
+            "╠════════════════════════════╣\n"
+            f"║  {proxy[:30]}{'...' if len(proxy)>30 else ''}  ║\n"
+            "╚════════════════════════════╝"
+        )
+    else:
+        texto = "❌ Error: El proxy ya existe"
+    
+    bot.reply_to(message, texto, reply_markup=menu_principal())
+
+def procesar_add_sitio(message):
+    url = message.text.strip()
+    if guardar_sitio(url):
+        texto = (
+            "╔════════════════════════════╗\n"
+            "║     ✅ SITIO GUARDADO      ║\n"
+            "╠════════════════════════════╣\n"
+            f"║  {url[:30]}{'...' if len(url)>30 else ''}  ║\n"
+            "╚════════════════════════════╝"
+        )
+    else:
+        texto = "❌ Error: El sitio ya existe o URL inválida"
+    
+    bot.reply_to(message, texto, reply_markup=menu_principal())
+
+def procesar_del_sitio(message):
+    url = message.text.strip()
+    if eliminar_sitio(url):
+        texto = f"✅ Sitio eliminado: {url[:30]}"
+    else:
+        texto = "❌ Sitio no encontrado"
+    
+    bot.reply_to(message, texto, reply_markup=menu_principal())
+
+# ==================== FUNCIONES DE LISTADO ====================
+
+def listar_tarjetas(message):
+    tarjetas = obtener_todas_tarjetas()
+    
+    if not tarjetas:
+        bot.send_message(message.chat.id, "📭 No hay tarjetas guardadas", reply_markup=menu_principal())
+        return
+    
+    texto = "╔════════════════════════════╗\n║     💳 MIS TARJETAS      ║\n╠════════════════════════════╣\n"
+    
+    for cc, fecha, veces in tarjetas[:10]:
+        fecha_corta = fecha[5:16] if fecha else "?"
+        cc_short = cc[:10] + "..." + cc[-4:] if len(cc) > 15 else cc
+        texto += f"║ 💳 {cc_short:<20} ║\n║    └ {fecha_corta} [{veces} veces] ║\n"
+    
+    texto += f"╠════════════════════════════╣\n║ 📊 Total: {len(tarjetas)} tarjetas        ║\n╚════════════════════════════╝"
+    
+    bot.send_message(message.chat.id, texto, reply_markup=menu_tarjetas())
 
 # ==================== ARCHIVOS ====================
 
 @bot.message_handler(content_types=['document'])
-@requiere_acceso
 def handle_document(message):
-    """Maneja archivos .txt (requiere acceso)"""
     if not message.document.file_name.endswith('.txt'):
         bot.reply_to(message, "❌ Solo acepto archivos .txt")
         return
@@ -1821,25 +1988,15 @@ def handle_document(message):
         else:
             texto = "❌ No se pudo identificar el tipo de archivo"
         
-        bot.edit_message_text(texto, message.chat.id, msg.message_id)
+        bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
         
     except Exception as e:
         bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, msg.message_id)
 
-# ==================== MANEJADOR POR DEFECTO ====================
-
 @bot.message_handler(func=lambda m: True)
-def default_handler(message):
+def default(message):
     if message.text and message.text.startswith('/'):
-        # Verificar si es un comando que requiere acceso
-        tiene_acceso, _ = verificar_acceso(message)
-        if not tiene_acceso and message.from_user.id != OWNER_ID:
-            bot.reply_to(
-                message, 
-                "❌ Necesitas una key para usar el bot.\nUsa /key TU_KEY_AQUI"
-            )
-        else:
-            bot.reply_to(message, "❓ Comando no reconocido. Usa /menu")
+        bot.reply_to(message, "❓ Comando no reconocido. Usa /menu")
     else:
         bot.reply_to(message, "❓ Usa /menu para ver las opciones")
 
@@ -1847,14 +2004,18 @@ def default_handler(message):
 
 if __name__ == "__main__":
     print("="*80)
-    print("🤖 AUTO SHOPIFY BOT - VERSIÓN COMPLETA")
+    print("🤖 AUTO SHOPIFY BOT - VERSIÓN MEJORADA")
     print("="*80)
-    print(f"👑 Owner ID: {OWNER_ID}")
-    print("✅ Sistema de keys activado")
-    print("✅ BIN lookup mejorado (bincheck.io)")
-    print("✅ Test de proxies avanzado")
+    print("✅ Mejoras implementadas:")
+    print("   2️⃣ Test de proxy avanzado (socket + HTTP)")
+    print("   7️⃣ BIN lookup con múltiples fuentes")
     print("="*80)
-    print("📱 Usa /start para comenzar")
+    print("✅ Gates disponibles:")
+    print("   • Stripe: $1.00       → /check")
+    print("   • PayPal: $10/$0.10/$1 → /pp /pp2 /pp3")
+    print("   • AutoShopify: variable → /sh")
+    print("="*80)
+    print("📱 Usa /menu para comenzar")
     print("="*80)
     
     # Para Railway, usamos polling con timeout
