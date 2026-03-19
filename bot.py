@@ -10,21 +10,16 @@ import random
 from datetime import datetime
 from threading import Thread, Lock
 import concurrent.futures
-import dns.resolver
-import dns.exception
 import socket
-import ssl
-from typing import Dict, List, Tuple, Optional
 
 # Configuración del bot - Usando variable de entorno para el token
-TOKEN = os.environ.get('TOKEN', '8503937259:AAEApOgsbu34qw5J6OKz1dxgvRzrFv9IQdE')
+TOKEN = os.environ.get('TOKEN', 'TU_TOKEN_AQUI')
 bot = telebot.TeleBot(TOKEN)
 
 # Lock para operaciones de base de datos (para hilos)
 db_lock = Lock()
 
 # ==================== FUNCIONES DE BASE DE DATOS ====================
-# Cada función abre y cierra su propia conexión para evitar problemas de hilos
 
 def get_db_connection():
     """Crea una nueva conexión a la base de datos"""
@@ -605,7 +600,7 @@ def verificar_api_paypal(cc, gate=1, proxy=None):
             'tiempo': 30
         }
 
-# ==================== NUEVA FUNCIÓN DE VERIFICACIÓN AUTOSHOPIFY CON API ACTUALIZADA ====================
+# ==================== FUNCIÓN DE VERIFICACIÓN AUTOSHOPIFY CON NUEVA API ====================
 
 def verificar_api_autoshopify(cc, url, proxy=None):
     """
@@ -629,12 +624,12 @@ def verificar_api_autoshopify(cc, url, proxy=None):
         try:
             data = response.json()
             
-            # Extraer información de la respuesta (ajusta según el formato real de la API)
+            # Extraer información de la respuesta
             response_text = data.get('Response', 'Unknown')
             price = data.get('Price', '0.00')
             gate = data.get('Gate', 'Shopify')
             
-            # Determinar si es éxito (ajusta según la respuesta real)
+            # Determinar si es éxito
             is_success = 'Order completed' in response_text or 'success' in response_text.lower()
             
             return {
@@ -776,697 +771,103 @@ def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User",
 [ϟ] T/t : {tiempo_str} | Proxy : {proxy_status}
 [ϟ] 𝗖𝗵𝗲𝗸𝗲𝗱 𝗯𝘆 : @AutoShopifyBot
 [ϟ] 𝗢𝘄𝗻𝗲𝗿 : {user_name}
-╚━━━━「𝐀𝐔𝐓𝐎 𝐒𝐇𝐎𝐏𝐈𝐅𝐘 𝐁𝐎Ｔ」━━━━╝
+╚━━━━「𝐀𝐔𝐓𝐎 𝐒𝐇𝐎𝐏𝐈𝐅𝐘 𝐁𝐎𝐓」━━━━╝
 """
     return texto
 
-# ==================== PROXY VALIDATOR PRO - SIN FALSOS POSITIVOS ====================
+# ==================== VERSIÓN SIMPLE DE TEST DE PROXIES (OPTIMIZADA PARA RAILWAY) ====================
 
-class ProxyValidatorPro:
-    """
-    Validador avanzado de proxies con múltiples capas de verificación
-    para eliminar falsos positivos completamente.
-    """
+@bot.message_handler(commands=['px'])
+def cmd_test_proxies_simple(message):
+    """Versión simple de test de proxies (optimizada para Railway)"""
     
-    def __init__(self):
-        # Endpoints de prueba múltiples para verificación cruzada
-        self.test_endpoints = [
-            {
-                'url': 'https://api.ipify.org?format=json',
-                'type': 'ipv4',
-                'weight': 2,
-                'required': True
-            },
-            {
-                'url': 'https://ipapi.co/json/',
-                'type': 'geo',
-                'weight': 1,
-                'required': False
-            },
-            {
-                'url': 'https://httpbin.org/ip',
-                'type': 'ipv4',
-                'weight': 1,
-                'required': True
-            },
-            {
-                'url': 'https://api.myip.com',
-                'type': 'ipv4',
-                'weight': 1,
-                'required': False
-            }
-        ]
-        
-        # Pruebas de DNS para detectar leaks
-        self.dns_test_domains = [
-            'google.com',
-            'cloudflare.com',
-            'amazon.com'
-        ]
-        
-        # Cabeceras HTTP realistas para evitar detección
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache'
-        }
-        
-        # Tiempos de espera configurables
-        self.timeouts = {
-            'connection': 5,
-            'read': 8,
-            'dns': 3,
-            'ssl': 4
-        }
-        
-        # Configuración de reintentos
-        self.retry_config = {
-            'max_retries': 2,
-            'backoff_factor': 0.5
-        }
-    
-    def test_proxy_comprehensive(self, proxy_string: str) -> Dict:
-        """
-        Prueba completa de un proxy con múltiples verificaciones.
-        Retorna un diccionario con resultados detallados.
-        """
-        start_time = time.time()
-        result = {
-            'proxy': proxy_string,
-            'timestamp': datetime.now().isoformat(),
-            'status': 'failed',
-            'tests': {},
-            'metrics': {},
-            'verdict': 'DEAD',
-            'details': {}
-        }
-        
-        try:
-            # Paso 1: Parsear y configurar proxy
-            proxy_config = self._parse_proxy(proxy_string)
-            if not proxy_config:
-                result['details']['error'] = 'Invalid proxy format'
-                return result
-            
-            # Paso 2: Prueba de conectividad básica
-            connectivity = self._test_connectivity(proxy_config)
-            result['tests']['connectivity'] = connectivity
-            if not connectivity['success']:
-                result['details']['error'] = connectivity.get('error', 'Connection failed')
-                return result
-            
-            # Paso 3: Prueba de resolución DNS (detectar leaks)
-            dns_test = self._test_dns_leak(proxy_config)
-            result['tests']['dns_leak'] = dns_test
-            
-            # Paso 4: Verificación cruzada con múltiples endpoints
-            endpoint_results = self._test_endpoints(proxy_config)
-            result['tests']['endpoints'] = endpoint_results
-            
-            # Paso 5: Prueba de latencia y estabilidad
-            latency = self._test_latency(proxy_config)
-            result['tests']['latency'] = latency
-            
-            # Paso 6: Prueba de SSL/TLS
-            ssl_test = self._test_ssl(proxy_config)
-            result['tests']['ssl'] = ssl_test
-            
-            # Calcular métricas y veredicto final
-            result['metrics'] = self._calculate_metrics(result['tests'])
-            result['verdict'] = self._determine_verdict(result['metrics'])
-            result['status'] = 'alive' if result['verdict'] in ['ELITE', 'ANONYMOUS'] else 'failed'
-            
-            # Tiempo total
-            result['total_time'] = round(time.time() - start_time, 2)
-            
-        except Exception as e:
-            result['details']['exception'] = str(e)
-            result['status'] = 'error'
-        
-        return result
-    
-    def _parse_proxy(self, proxy_string: str) -> Optional[Dict]:
-        """Parsea el string del proxy y configura el diccionario para requests."""
-        try:
-            parts = proxy_string.split(':')
-            config = {}
-            
-            if len(parts) == 2:
-                # ip:port
-                config = {
-                    'http': f'http://{proxy_string}',
-                    'https': f'http://{proxy_string}'
-                }
-            elif len(parts) == 4:
-                # ip:port:user:pass
-                ip, port, user, password = parts
-                auth = f'{user}:{password}@'
-                proxy_url = f'http://{auth}{ip}:{port}'
-                config = {
-                    'http': proxy_url,
-                    'https': proxy_url
-                }
-            else:
-                return None
-            
-            # Guardar también en formato original para otros usos
-            config['original'] = proxy_string
-            config['host'] = parts[0]
-            config['port'] = int(parts[1]) if len(parts) >= 2 else None
-            
-            return config
-            
-        except Exception:
-            return None
-    
-    def _test_connectivity(self, proxy_config: Dict) -> Dict:
-        """Prueba de conectividad básica usando socket."""
-        result = {'success': False, 'error': None}
-        
-        try:
-            host = proxy_config.get('host')
-            port = proxy_config.get('port')
-            
-            if not host or not port:
-                result['error'] = 'Missing host or port'
-                return result
-            
-            # Probar conexión TCP
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(self.timeouts['connection'])
-            
-            start = time.time()
-            sock.connect((host, port))
-            connect_time = time.time() - start
-            
-            sock.close()
-            
-            result['success'] = True
-            result['connect_time'] = round(connect_time * 1000, 2)  # en ms
-            
-        except socket.timeout:
-            result['error'] = 'Connection timeout'
-        except socket.error as e:
-            result['error'] = f'Socket error: {str(e)}'
-        except Exception as e:
-            result['error'] = str(e)
-        
-        return result
-    
-    def _test_dns_leak(self, proxy_config: Dict) -> Dict:
-        """
-        Prueba si hay DNS leaks usando el proxy.
-        Un proxy sin leaks debe resolver DNS a través del proxy.
-        """
-        result = {'success': False, 'leak_detected': True, 'details': {}}
-        
-        try:
-            # Crear sesión con proxy
-            session = requests.Session()
-            session.proxies = proxy_config
-            session.headers.update(self.headers)
-            session.timeout = self.timeouts['dns']
-            
-            # Probar varios dominios
-            dns_results = []
-            for domain in self.dns_test_domains:
-                try:
-                    # Hacer request a través del proxy
-                    resp = session.get(
-                        f'https://dns.google/resolve?name={domain}&type=A',
-                        timeout=self.timeouts['dns']
-                    )
-                    
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        ips = [ans['data'] for ans in data.get('Answer', []) if ans.get('type') == 1]
-                        dns_results.append({
-                            'domain': domain,
-                            'ips': ips,
-                            'resolved': len(ips) > 0
-                        })
-                except:
-                    pass
-            
-            # Determinar si hay leak
-            resolved_count = sum(1 for r in dns_results if r['resolved'])
-            result['leak_detected'] = resolved_count == 0
-            result['success'] = resolved_count > 0
-            result['details']['domains_tested'] = len(self.dns_test_domains)
-            result['details']['resolved_count'] = resolved_count
-            result['details']['results'] = dns_results
-            
-        except Exception as e:
-            result['error'] = str(e)
-        
-        return result
-    
-    def _test_endpoints(self, proxy_config: Dict) -> Dict:
-        """
-        Verificación cruzada con múltiples endpoints.
-        Esto elimina falsos positivos porque requiere consistencia.
-        """
-        result = {
-            'success': False,
-            'endpoints_tested': [],
-            'consistent_ip': None,
-            'ip_consistency': False,
-            'geo_match': False
-        }
-        
-        try:
-            session = requests.Session()
-            session.proxies = proxy_config
-            session.headers.update(self.headers)
-            session.timeout = self.timeouts['read']
-            
-            ips_found = set()
-            geo_data = []
-            
-            for endpoint in self.test_endpoints:
-                try:
-                    start = time.time()
-                    resp = session.get(endpoint['url'], timeout=self.timeouts['read'])
-                    response_time = time.time() - start
-                    
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        
-                        # Extraer IP según el endpoint
-                        if 'ipify' in endpoint['url']:
-                            ip = data.get('ip')
-                        elif 'ipapi' in endpoint['url']:
-                            ip = data.get('ip')
-                            geo_data.append({
-                                'country': data.get('country_name'),
-                                'city': data.get('city'),
-                                'region': data.get('region')
-                            })
-                        elif 'httpbin' in endpoint['url']:
-                            ip = data.get('origin')
-                        elif 'myip' in endpoint['url']:
-                            ip = data.get('ip')
-                        else:
-                            ip = None
-                        
-                        if ip:
-                            ips_found.add(ip)
-                            
-                        result['endpoints_tested'].append({
-                            'url': endpoint['url'],
-                            'status': 'success',
-                            'ip': ip,
-                            'response_time': round(response_time * 1000, 2),
-                            'weight': endpoint['weight']
-                        })
-                    else:
-                        result['endpoints_tested'].append({
-                            'url': endpoint['url'],
-                            'status': 'failed',
-                            'status_code': resp.status_code
-                        })
-                        
-                except Exception as e:
-                    result['endpoints_tested'].append({
-                        'url': endpoint['url'],
-                        'status': 'error',
-                        'error': str(e)[:50]
-                    })
-            
-            # Verificar consistencia de IP
-            if len(ips_found) == 1:
-                result['consistent_ip'] = list(ips_found)[0]
-                result['ip_consistency'] = True
-                result['success'] = True
-            elif len(ips_found) > 1:
-                result['consistent_ip'] = list(ips_found)
-                result['ip_consistency'] = False
-                result['success'] = False
-            
-            # Datos de geolocalización si están disponibles
-            if geo_data:
-                result['geo'] = geo_data[0] if geo_data else {}
-                result['geo_match'] = True
-            
-        except Exception as e:
-            result['error'] = str(e)
-        
-        return result
-    
-    def _test_latency(self, proxy_config: Dict, num_requests: int = 5) -> Dict:
-        """Prueba de latencia con múltiples requests para medir estabilidad."""
-        result = {
-            'success': False,
-            'avg_latency': None,
-            'min_latency': None,
-            'max_latency': None,
-            'std_dev': None,
-            'packet_loss': None,
-            'stability': 'unknown'
-        }
-        
-        try:
-            session = requests.Session()
-            session.proxies = proxy_config
-            session.headers.update(self.headers)
-            
-            latencies = []
-            successful = 0
-            
-            for i in range(num_requests):
-                try:
-                    start = time.time()
-                    resp = session.get(
-                        'https://httpbin.org/get',
-                        timeout=self.timeouts['read']
-                    )
-                    elapsed = time.time() - start
-                    
-                    if resp.status_code == 200:
-                        latencies.append(elapsed * 1000)  # en ms
-                        successful += 1
-                except:
-                    pass
-                
-                time.sleep(0.2)  # pequeño delay entre requests
-            
-            if latencies:
-                import statistics
-                result['success'] = True
-                result['avg_latency'] = round(statistics.mean(latencies), 2)
-                result['min_latency'] = round(min(latencies), 2)
-                result['max_latency'] = round(max(latencies), 2)
-                result['std_dev'] = round(statistics.stdev(latencies) if len(latencies) > 1 else 0, 2)
-                result['packet_loss'] = round(((num_requests - successful) / num_requests) * 100, 2)
-                
-                # Determinar estabilidad
-                if result['std_dev'] < 50:
-                    result['stability'] = 'stable'
-                elif result['std_dev'] < 150:
-                    result['stability'] = 'moderate'
-                else:
-                    result['stability'] = 'unstable'
-            
-        except Exception as e:
-            result['error'] = str(e)
-        
-        return result
-    
-    def _test_ssl(self, proxy_config: Dict) -> Dict:
-        """Prueba la capacidad SSL/TLS del proxy."""
-        result = {'success': False, 'ssl_supported': False}
-        
-        try:
-            session = requests.Session()
-            session.proxies = proxy_config
-            session.headers.update(self.headers)
-            session.timeout = self.timeouts['ssl']
-            
-            # Probar conexión HTTPS
-            resp = session.get('https://www.google.com', timeout=self.timeouts['ssl'])
-            
-            if resp.status_code == 200:
-                result['success'] = True
-                result['ssl_supported'] = True
-                result['status_code'] = resp.status_code
-            
-        except requests.exceptions.SSLError:
-            result['ssl_supported'] = False
-            result['error'] = 'SSL Error'
-        except Exception as e:
-            result['error'] = str(e)
-        
-        return result
-    
-    def _calculate_metrics(self, tests: Dict) -> Dict:
-        """Calcula métricas agregadas de todas las pruebas."""
-        metrics = {
-            'score': 0,
-            'quality': 'poor',
-            'speed_grade': 'F',
-            'reliability': 0
-        }
-        
-        score = 0
-        max_score = 0
-        
-        # Puntaje por conectividad
-        if tests.get('connectivity', {}).get('success'):
-            score += 20
-        max_score += 20
-        
-        # Puntaje por DNS leak (ausencia de leak)
-        if tests.get('dns_leak', {}).get('success') and not tests['dns_leak'].get('leak_detected', True):
-            score += 20
-        max_score += 20
-        
-        # Puntaje por endpoints consistentes
-        endpoints = tests.get('endpoints', {})
-        if endpoints.get('success') and endpoints.get('ip_consistency'):
-            score += 30
-        max_score += 30
-        
-        # Puntaje por latencia
-        latency = tests.get('latency', {})
-        if latency.get('success'):
-            avg_lat = latency.get('avg_latency', 999)
-            if avg_lat < 200:
-                score += 20
-            elif avg_lat < 500:
-                score += 10
-            elif avg_lat < 1000:
-                score += 5
-        max_score += 20
-        
-        # Puntaje por SSL
-        if tests.get('ssl', {}).get('ssl_supported'):
-            score += 10
-        max_score += 10
-        
-        # Calcular porcentaje
-        if max_score > 0:
-            metrics['score'] = round((score / max_score) * 100, 2)
-        
-        # Determinar calidad
-        if metrics['score'] >= 90:
-            metrics['quality'] = 'elite'
-            metrics['speed_grade'] = 'A+'
-        elif metrics['score'] >= 80:
-            metrics['quality'] = 'excellent'
-            metrics['speed_grade'] = 'A'
-        elif metrics['score'] >= 70:
-            metrics['quality'] = 'good'
-            metrics['speed_grade'] = 'B'
-        elif metrics['score'] >= 60:
-            metrics['quality'] = 'fair'
-            metrics['speed_grade'] = 'C'
-        elif metrics['score'] >= 40:
-            metrics['quality'] = 'poor'
-            metrics['speed_grade'] = 'D'
-        else:
-            metrics['quality'] = 'bad'
-            metrics['speed_grade'] = 'F'
-        
-        # Calcular confiabilidad (basado en múltiples factores)
-        reliability_factors = [
-            tests.get('connectivity', {}).get('success', False),
-            tests.get('dns_leak', {}).get('success', False) and not tests.get('dns_leak', {}).get('leak_detected', True),
-            endpoints.get('success', False) and endpoints.get('ip_consistency', False),
-            latency.get('success', False),
-            tests.get('ssl', {}).get('ssl_supported', False)
-        ]
-        metrics['reliability'] = round((sum(reliability_factors) / len(reliability_factors)) * 100, 2)
-        
-        return metrics
-    
-    def _determine_verdict(self, metrics: Dict) -> str:
-        """Determina el veredicto final basado en las métricas."""
-        if metrics['score'] >= 80 and metrics['reliability'] >= 80:
-            return 'ELITE'
-        elif metrics['score'] >= 60 and metrics['reliability'] >= 60:
-            return 'ANONYMOUS'
-        elif metrics['score'] >= 40:
-            return 'TRANSPARENT'
-        else:
-            return 'DEAD'
-    
-    def test_batch(self, proxy_list: List[str], max_workers: int = 10) -> List[Dict]:
-        """
-        Prueba múltiples proxies en paralelo.
-        """
-        results = []
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_proxy = {
-                executor.submit(self.test_proxy_comprehensive, proxy): proxy 
-                for proxy in proxy_list
-            }
-            
-            for future in concurrent.futures.as_completed(future_to_proxy):
-                proxy = future_to_proxy[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    results.append({
-                        'proxy': proxy,
-                        'status': 'error',
-                        'verdict': 'DEAD',
-                        'error': str(e)
-                    })
-        
-        # Ordenar por puntaje (mejores primero)
-        results.sort(key=lambda x: x.get('metrics', {}).get('score', 0), reverse=True)
-        return results
-    
-    def format_results_pretty(self, results: List[Dict]) -> str:
-        """Formatea los resultados de forma bonita para mostrar."""
-        lines = []
-        lines.append("=" * 90)
-        lines.append(f"{'PROXY VALIDATOR PRO - RESULTADOS SIN FALSOS POSITIVOS':^90}")
-        lines.append("=" * 90)
-        
-        stats = {
-            'ELITE': 0,
-            'ANONYMOUS': 0,
-            'TRANSPARENT': 0,
-            'DEAD': 0,
-            'error': 0
-        }
-        
-        for r in results:
-            stats[r.get('verdict', 'error')] = stats.get(r.get('verdict', 'error'), 0) + 1
-        
-        lines.append(f"\n📊 ESTADÍSTICAS GLOBALES:")
-        lines.append(f"   ✅ ELITE: {stats['ELITE']}")
-        lines.append(f"   🔒 ANONYMOUS: {stats['ANONYMOUS']}")
-        lines.append(f"   👁️ TRANSPARENT: {stats['TRANSPARENT']}")
-        lines.append(f"   💀 DEAD: {stats['DEAD']}")
-        lines.append(f"   ❌ ERROR: {stats['error']}")
-        lines.append("")
-        
-        for i, r in enumerate(results[:20]):  # Mostrar top 20
-            verdict = r.get('verdict', 'UNKNOWN')
-            proxy = r.get('proxy', 'N/A')
-            score = r.get('metrics', {}).get('score', 0)
-            quality = r.get('metrics', {}).get('quality', 'unknown')
-            reliability = r.get('metrics', {}).get('reliability', 0)
-            speed = r.get('metrics', {}).get('speed_grade', 'F')
-            
-            # Emoji según veredicto
-            if verdict == 'ELITE':
-                emoji = '🏆'
-            elif verdict == 'ANONYMOUS':
-                emoji = '✅'
-            elif verdict == 'TRANSPARENT':
-                emoji = '⚠️'
-            else:
-                emoji = '❌'
-            
-            lines.append(f"{emoji} {i+1:2d}. {proxy[:40]:40} | Score: {score:5.1f} | {quality:10} | Rel: {reliability:3.0f}% | Grade: {speed}")
-            
-            # Mostrar IP consistente si existe
-            endpoints = r.get('tests', {}).get('endpoints', {})
-            if endpoints.get('consistent_ip'):
-                ip_display = endpoints['consistent_ip'][:15] if isinstance(endpoints['consistent_ip'], str) else str(endpoints['consistent_ip'])[:15]
-                lines.append(f"       IP: {ip_display}...")
-        
-        lines.append("\n" + "=" * 90)
-        lines.append("📁 Reporte completo guardado en archivo")
-        lines.append("=" * 90)
-        
-        return "\n".join(lines)
-    
-    def save_results(self, results: List[Dict], filename: str = None):
-        """Guarda los resultados en archivo JSON."""
-        if not filename:
-            filename = f"proxy_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-        
-        return filename
-
-# ==================== COMANDO PARA TESTEAR PROXIES (VERSIÓN MEJORADA) ====================
-
-@bot.message_handler(commands=['px', 'pxpro', 'proxytest'])
-def cmd_test_proxies_pro(message):
-    """
-    Versión mejorada del comando /px con validación sin falsos positivos.
-    """
     proxies = obtener_proxies()
     
     if not proxies:
         bot.reply_to(message, "📭 No hay proxies guardados para testear")
         return
     
-    msg = bot.reply_to(message, f"🔬 Iniciando análisis PROFUNDO de {len(proxies)} proxies...\n"
-                                 f"⚠️ Esto puede tomar varios minutos (validación sin falsos positivos)")
+    msg = bot.reply_to(message, f"🔄 Testeando {len(proxies)} proxies...")
     
-    try:
-        # Inicializar validador
-        validator = ProxyValidatorPro()
-        
-        # Ejecutar pruebas en lote
-        results = validator.test_batch(proxies, max_workers=8)
-        
-        # Actualizar base de datos con resultados reales
-        for r in results:
-            proxy = r.get('proxy')
-            if proxy:
-                verdict = r.get('verdict', 'DEAD')
-                score = r.get('metrics', {}).get('score', 0)
-                
-                # Mapear veredicto a estado para la BD
-                if verdict == 'ELITE':
-                    status = 'alive'
-                    tiempo = f"Score: {score}"
-                elif verdict == 'ANONYMOUS':
-                    status = 'alive'
-                    tiempo = f"Score: {score}"
-                elif verdict == 'TRANSPARENT':
-                    status = 'slow'
-                    tiempo = f"Score: {score} (transparente)"
-                else:
-                    status = 'dead'
-                    tiempo = "Failed comprehensive test"
-                
-                actualizar_status_proxy(proxy, status, tiempo)
-        
-        # Guardar resultados completos
-        filename = validator.save_results(results)
-        
-        # Enviar resumen
-        texto_resumen = validator.format_results_pretty(results)
-        
-        # Enviar archivo de resultados
-        with open(filename, 'rb') as f:
-            bot.send_document(
-                message.chat.id,
-                f,
-                caption=f"📊 Análisis completo de {len(proxies)} proxies - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    resultados = {
+        'vivos': [],
+        'lentos': [],
+        'muertos': []
+    }
+    
+    for i, proxy in enumerate(proxies, 1):
+        try:
+            # Formatear proxy para requests
+            partes = proxy.split(':')
+            if len(partes) == 4:
+                ip, puerto, user, passw = partes
+                proxy_dict = {
+                    'http': f'http://{user}:{passw}@{ip}:{puerto}',
+                    'https': f'https://{user}:{passw}@{ip}:{puerto}'
+                }
+            else:
+                proxy_dict = {
+                    'http': f'http://{proxy}',
+                    'https': f'https://{proxy}'
+                }
+            
+            # Probar con httpbin.org
+            start_time = time.time()
+            response = requests.get(
+                'http://httpbin.org/ip',
+                proxies=proxy_dict,
+                timeout=5
             )
+            elapsed = time.time() - start_time
+            
+            if response.status_code == 200:
+                if elapsed < 2:
+                    resultados['vivos'].append((proxy, f"{elapsed:.2f}s"))
+                    actualizar_status_proxy(proxy, 'alive', f"{elapsed:.2f}s")
+                else:
+                    resultados['lentos'].append((proxy, f"{elapsed:.2f}s"))
+                    actualizar_status_proxy(proxy, 'slow', f"{elapsed:.2f}s")
+            else:
+                resultados['muertos'].append((proxy, f"HTTP {response.status_code}"))
+                actualizar_status_proxy(proxy, 'dead', f"HTTP {response.status_code}")
+                
+        except requests.exceptions.ConnectTimeout:
+            resultados['muertos'].append((proxy, "Timeout"))
+            actualizar_status_proxy(proxy, 'dead', "Timeout")
+        except requests.exceptions.ProxyError:
+            resultados['muertos'].append((proxy, "Proxy Error"))
+            actualizar_status_proxy(proxy, 'dead', "Proxy Error")
+        except Exception as e:
+            resultados['muertos'].append((proxy, str(e)[:20]))
+            actualizar_status_proxy(proxy, 'dead', str(e)[:20])
         
-        # Editar mensaje con resumen
-        bot.edit_message_text(
-            texto_resumen[:4000],  # Telegram limit
-            message.chat.id,
-            msg.message_id
-        )
-        
-        # Limpiar archivo temporal
-        os.remove(filename)
-        
-    except Exception as e:
-        bot.edit_message_text(
-            f"❌ Error durante el análisis: {str(e)}",
-            message.chat.id,
-            msg.message_id
-        )
+        # Actualizar progreso cada 5 proxies
+        if i % 5 == 0 or i == len(proxies):
+            try:
+                bot.edit_message_text(
+                    f"🔄 Testeando proxies... {i}/{len(proxies)}",
+                    message.chat.id,
+                    msg.message_id
+                )
+            except:
+                pass
+    
+    # Crear mensaje de resumen
+    texto = f"""✅ TEST DE PROXIES COMPLETADO
+━━━━━━━━━━━━━━━━━━━━━━
+📊 RESULTADOS:
+
+✅ Vivos: {len(resultados['vivos'])}
+🐢 Lentos: {len(resultados['lentos'])}
+❌ Muertos: {len(resultados['muertos'])}
+━━━━━━━━━━━━━━━━━━━━━━
+
+💡 Usa /proxies para ver el estado actualizado"""
+
+    try:
+        bot.edit_message_text(texto, message.chat.id, msg.message_id)
+    except:
+        bot.send_message(message.chat.id, texto)
 
 # ==================== MENÚS Y BOTONES ====================
 
@@ -1476,7 +877,7 @@ def menu_principal():
     btn2 = types.InlineKeyboardButton("🌐 Proxies", callback_data='menu_proxies')
     btn3 = types.InlineKeyboardButton("💵 Stripe $1 No AVS", callback_data='menu_stripe_noavs')
     btn4 = types.InlineKeyboardButton("💰 PayPal", callback_data='menu_paypal')
-    btn5 = types.InlineKeyboardButton("🛍️ AutoShopify (NUEVA API)", callback_data='menu_shopify')
+    btn5 = types.InlineKeyboardButton("🛍️ AutoShopify", callback_data='menu_shopify')
     btn6 = types.InlineKeyboardButton("📊 Estadísticas", callback_data='menu_stats')
     btn7 = types.InlineKeyboardButton("📁 Cargar archivo", callback_data='menu_cargar')
     markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
@@ -1498,7 +899,7 @@ def menu_proxies():
     btn3 = types.InlineKeyboardButton("🗑️ Eliminar proxy", callback_data='del_proxy')
     btn4 = types.InlineKeyboardButton("🗑️ Eliminar TODOS", callback_data='del_all_proxies')
     btn5 = types.InlineKeyboardButton("🧹 Limpiar muertos", callback_data='clean_dead')
-    btn6 = types.InlineKeyboardButton("🔍 Testear proxies (PRO)", callback_data='test_proxies')
+    btn6 = types.InlineKeyboardButton("🔍 Testear proxies", callback_data='test_proxies')
     btn7 = types.InlineKeyboardButton("🔙 Volver", callback_data='volver_principal')
     markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
     return markup
@@ -1535,11 +936,10 @@ def cmd_menu(message):
         "║  Gates disponibles:         ║\n"
         "║  • Stripe $1 No AVS         ║\n"
         "║  • PayPal: $10/$0.10/$1    ║\n"
-        "║  • AutoShopify (NUEVA API) ║\n"
+        "║  • AutoShopify             ║\n"
         "║                            ║\n"
         "║  Proxies:                   ║\n"
-        "║  • /px - Testeo PROFUNDO    ║\n"
-        "║    (sin falsos positivos)   ║\n"
+        "║  • /px - Testear proxies    ║\n"
         "║                            ║\n"
         "║  Sitios Shopify:            ║\n"
         "║  • /addsh URL - Agregar    ║\n"
@@ -1550,7 +950,7 @@ def cmd_menu(message):
         "║  /pp CC - PayPal $10       ║\n"
         "║  /pp2 CC - PayPal $0.10    ║\n"
         "║  /pp3 CC - PayPal $1       ║\n"
-        "║  /sh CC - AutoShopify (NUEVO)║\n"
+        "║  /sh CC - AutoShopify      ║\n"
         "║  /mass - Stripe masivo     ║\n"
         "║  /mpp - PayPal masivo      ║\n"
         "║  /msh - Shopify masivo     ║\n"
@@ -1574,7 +974,6 @@ def cmd_help(message):
         "║    /pp2 CC - PayPal $0.10  ║\n"
         "║    /pp3 CC - PayPal $1     ║\n"
         "║    /sh CC - AutoShopify    ║\n"
-        "║      (NUEVA API)            ║\n"
         "║                            ║\n"
         "║  • Comandos masivos:       ║\n"
         "║    /mass - Stripe masivo   ║\n"
@@ -1587,8 +986,7 @@ def cmd_help(message):
         "║    /delsh URL - Eliminar   ║\n"
         "║                            ║\n"
         "║  • Proxies:                 ║\n"
-        "║    /px - Testeo PROFUNDO   ║\n"
-        "║    (sin falsos positivos)  ║\n"
+        "║    /px - Testear proxies    ║\n"
         "║    /proxies - Ver lista     ║\n"
         "║                            ║\n"
         "║  • Otros comandos:         ║\n"
@@ -1658,7 +1056,7 @@ def cmd_del_all_sitios(message):
         reply_markup=confirmacion
     )
 
-# ==================== COMANDO PARA STRIPE $1 NO AVS (GATE 5) ====================
+# ==================== COMANDO PARA STRIPE $1 NO AVS ====================
 
 @bot.message_handler(commands=['check5'])
 def cmd_check_5(message):
@@ -1842,7 +1240,7 @@ def cmd_pp3(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
-# ==================== COMANDOS DE VERIFICACIÓN AUTOSHOPIFY CON NUEVA API ====================
+# ==================== COMANDOS DE VERIFICACIÓN AUTOSHOPIFY ====================
 
 @bot.message_handler(commands=['sh'])
 def cmd_shopify(message):
@@ -1901,7 +1299,7 @@ def cmd_shopify(message):
             # Actualizar estadísticas del sitio
             actualizar_estadisticas_sitio(url, mejor_resultado['success'])
             
-            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Shopify (Nueva API)")
+            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Shopify")
             bot.edit_message_text(texto_premium, message.chat.id, msg.message_id)
         else:
             bot.edit_message_text("❌ No se pudo verificar", message.chat.id, msg.message_id)
@@ -2225,7 +1623,7 @@ def procesar_verificacion_masiva_paypal(task_id, chat_id, delay, notificar_cada)
    ├─ 🪙 $0.10: {respuestas['PayPal $0.10']['message'][:50]}
    └─ 💎 $1: {respuestas['PayPal $1']['message'][:50]}"""
         else:
-            # Detalle cuando todos declinan - CON RESPUESTAS REALES
+            # Detalle cuando todos declinan
             detalle = f"""❌ {card}
    ├─ 💵 $10: {respuestas['PayPal $10']['message'][:50]}
    ├─ 🪙 $0.10: {respuestas['PayPal $0.10']['message'][:50]}
@@ -2304,11 +1702,11 @@ def procesar_verificacion_masiva_paypal(task_id, chat_id, delay, notificar_cada)
     if task_id in active_tasks:
         del active_tasks[task_id]
 
-# ==================== VERIFICACIÓN MASIVA AUTOSHOPIFY CON NUEVA API ====================
+# ==================== VERIFICACIÓN MASIVA AUTOSHOPIFY ====================
 
 @bot.message_handler(commands=['msh'])
 def cmd_mass_shopify(message):
-    """Verificación masiva con AutoShopify (NUEVA API)"""
+    """Verificación masiva con AutoShopify"""
     
     tarjetas = obtener_todas_tarjetas()
     sitios = obtener_sitios()
@@ -2349,7 +1747,7 @@ def cmd_mass_shopify(message):
         'cancel': False
     }
     
-    config = f"""🛍️ VERIFICACIÓN MASIVA SHOPIFY (NUEVA API)
+    config = f"""🛍️ VERIFICACIÓN MASIVA SHOPIFY
 ━━━━━━━━━━━━━━━━━━━━━━
 📌 Tarjetas: {len(tarjetas)}
 🌐 Sitios: {len(sitios)}
@@ -2367,7 +1765,7 @@ def cmd_mass_shopify(message):
     thread.start()
 
 def procesar_verificacion_masiva_shopify(task_id, chat_id, delay, notificar_cada):
-    """Procesa verificación masiva con AutoShopify (NUEVA API)"""
+    """Procesa verificación masiva con AutoShopify"""
     
     cards = [c[0] for c in obtener_todas_tarjetas()]
     sitios = obtener_sitios()
@@ -2378,7 +1776,7 @@ def procesar_verificacion_masiva_shopify(task_id, chat_id, delay, notificar_cada
         bot.send_message(chat_id, "📭 No hay tarjetas o sitios suficientes")
         return
     
-    msg = bot.send_message(chat_id, "🔄 Iniciando verificación Shopify (NUEVA API)...")
+    msg = bot.send_message(chat_id, "🔄 Iniciando verificación Shopify...")
     
     procesadas = 0
     resultados = {'success': 0, 'failed': 0, 'error': 0}
@@ -2460,7 +1858,7 @@ def procesar_verificacion_masiva_shopify(task_id, chat_id, delay, notificar_cada
     
     filename = f"resultados_shopify_{task_id}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
-        f.write(f"RESULTADOS VERIFICACIÓN SHOPIFY (NUEVA API)\n")
+        f.write(f"RESULTADOS VERIFICACIÓN SHOPIFY\n")
         f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Total tarjetas: {total_tarjetas}\n")
@@ -2475,7 +1873,7 @@ def procesar_verificacion_masiva_shopify(task_id, chat_id, delay, notificar_cada
             f.write(f"{d}\n")
     
     # Mensaje final
-    texto_final = f"""✅ VERIFICACIÓN SHOPIFY COMPLETADA (NUEVA API)
+    texto_final = f"""✅ VERIFICACIÓN SHOPIFY COMPLETADA
 ━━━━━━━━━━━━━━━━━━━━━━
 📊 RESULTADOS:
 ✅ Aprobadas: {resultados['success']}
@@ -2492,7 +1890,7 @@ def procesar_verificacion_masiva_shopify(task_id, chat_id, delay, notificar_cada
     
     # Enviar archivo
     with open(filename, 'rb') as f:
-        bot.send_document(chat_id, f, caption=f"📊 Resultados Shopify (Nueva API) - {total_tarjetas} tarjetas")
+        bot.send_document(chat_id, f, caption=f"📊 Resultados Shopify - {total_tarjetas} tarjetas")
     
     os.remove(filename)
     
@@ -2553,7 +1951,7 @@ def callback_handler(call):
     
     elif call.data == 'menu_shopify':
         bot.edit_message_text(
-            "🛍️ *GESTIÓN DE SITIOS SHOPIFY (NUEVA API)*\n\nSelecciona una opción:",
+            "🛍️ *GESTIÓN DE SITIOS SHOPIFY*\n\nSelecciona una opción:",
             call.message.chat.id,
             call.message.message_id,
             parse_mode='Markdown',
@@ -2584,14 +1982,14 @@ def callback_handler(call):
     elif call.data == 'shopify_individual':
         bot.send_message(
             call.message.chat.id,
-            "🛍️ *AUTOSHOPIFY INDIVIDUAL (NUEVA API)*\n\nUsa: `/sh NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/sh 4128717483067607|07|27|443`\n\nPara sitio específico: `/sh CC URL`",
+            "🛍️ *AUTOSHOPIFY INDIVIDUAL*\n\nUsa: `/sh NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/sh 4128717483067607|07|27|443`\n\nPara sitio específico: `/sh CC URL`",
             parse_mode='Markdown'
         )
     
     elif call.data == 'shopify_masivo':
         bot.send_message(
             call.message.chat.id,
-            "🛍️ *VERIFICACIÓN MASIVA SHOPIFY (NUEVA API)*\n\nUsa: `/msh`\n\nOpciones:\n`/msh --delay 3 --notificar 10`",
+            "🛍️ *VERIFICACIÓN MASIVA SHOPIFY*\n\nUsa: `/msh`\n\nOpciones:\n`/msh --delay 3 --notificar 10`",
             parse_mode='Markdown'
         )
     
@@ -2732,7 +2130,7 @@ def callback_handler(call):
         )
     
     elif call.data == 'test_proxies':
-        cmd_test_proxies_pro(call.message)
+        cmd_test_proxies_simple(call.message)
     
     elif call.data == 'clean_dead':
         eliminados = eliminar_proxies_muertos()
@@ -2981,31 +2379,31 @@ def default(message):
 
 if __name__ == "__main__":
     print("="*80)
-    print("🤖 AUTO SHOPIFY BOT - VERSIÓN CON NUEVA API SHOPIFY")
+    print("🤖 AUTO SHOPIFY BOT - VERSIÓN OPTIMIZADA PARA RAILWAY")
     print("="*80)
     print("✅ Gates disponibles:")
     print("   • Stripe $1 No AVS  → /check5")
     print("   • PayPal: $10       → /pp")
     print("   • PayPal: $0.10     → /pp2")
     print("   • PayPal: $1        → /pp3")
-    print("   • AutoShopify       → /sh (NUEVA API)")
+    print("   • AutoShopify       → /sh")
     print("="*80)
     print("✅ Comandos masivos:")
-    print("   • Stripe $1 No AVS masivo → /mass")
-    print("   • PayPal masivo           → /mpp")
-    print("   • Shopify masivo          → /msh (NUEVA API)")
+    print("   • Stripe masivo     → /mass")
+    print("   • PayPal masivo     → /mpp")
+    print("   • Shopify masivo    → /msh")
     print("="*80)
     print("✅ Proxies:")
-    print("   • /px - Testeo PROFUNDO sin falsos positivos")
+    print("   • /px - Testear proxies")
     print("   • /proxies - Ver lista")
     print("="*80)
     print("📱 Usa /menu para comenzar")
     print("="*80)
     
     # Para Railway, usamos polling con timeout
-    try:
-        bot.infinity_polling(timeout=60, long_polling_timeout=60)
-    except Exception as e:
-        print(f"❌ Error en polling: {e}")
-        time.sleep(10)
-        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    while True:
+        try:
+            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+        except Exception as e:
+            print(f"❌ Error en polling: {e}")
+            time.sleep(10)
