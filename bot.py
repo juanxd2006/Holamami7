@@ -771,6 +771,7 @@ def verificar_api_autoshopify(cc, url, proxy=None):
         }
 
 # ==================== NUEVO GATEWAY: iSubscribe UK (£4.00) ====================
+# VERSIÓN CORREGIDA - SIEMPRE MUESTRA EL MENSAJE CORRECTO
 
 def verificar_isubscribe(cc, proxy=None):
     """
@@ -956,34 +957,28 @@ def verificar_isubscribe(cc, proxy=None):
             allow_redirects=False
         )
         
-        # PASO 10: Verificar resultado - VERSIÓN CORREGIDA
+        # PASO 10: Verificar resultado - VERSIÓN CORREGIDA Y FORZADA
         r = session.get(
             "https://www.isubscribe.co.uk/ssl/checkout/index.cfm?view=returning&step=confirm&formmode=edit&source=confirm&error=true&errorno=05",
             headers=headers,
             timeout=15
         )
         
-        # Extraer mensaje de error - CORREGIDO
+        # Extraer mensaje de error - CORRECCIÓN DEFINITIVA
         error_msg = "The transaction was declined, please check with the card issuer or use a different card."
         
-        if "alert alert-danger" in r.text:
-            msg_div = re.search(r'<div class="alert alert-danger[^>]*>(.*?)</div>', r.text, re.DOTALL)
-            if msg_div:
-                error_msg = html.unescape(msg_div.group(1))
-                error_msg = re.sub(r'<[^>]+>', '', error_msg).strip()
-        
-        if error_msg == "The transaction was declined, please check with the card issuer or use a different card.":
-            decline_patterns = [
-                r'The transaction was declined[^<]*',
-                r'Your card was declined[^<]*',
-                r'Card declined[^<]*',
-                r'insufficient funds[^<]*'
-            ]
-            for pattern in decline_patterns:
-                match = re.search(pattern, r.text, re.IGNORECASE)
-                if match:
-                    error_msg = match.group(0)
-                    break
+        # Buscar el mensaje de error específico
+        decline_match = re.search(r'The transaction was declined[^<]*', r.text, re.IGNORECASE)
+        if decline_match:
+            error_msg = decline_match.group(0)
+        else:
+            card_declined = re.search(r'Your card was declined[^<]*', r.text, re.IGNORECASE)
+            if card_declined:
+                error_msg = card_declined.group(0)
+            else:
+                generic_decline = re.search(r'Card declined[^<]*', r.text, re.IGNORECASE)
+                if generic_decline:
+                    error_msg = generic_decline.group(0)
         
         elapsed_time = time.time() - start_time
         
