@@ -540,34 +540,88 @@ def obtener_estadisticas():
         'aprobadas': total_success or 0
     }
 
-# ==================== FUNCIÓN DE CONSULTA BIN ====================
+# ==================== FUNCIÓN DE CONSULTA BIN MEJORADA ====================
+
+def get_emoji_flag(country_code):
+    """Convierte código de país a emoji de bandera"""
+    if not country_code or len(country_code) != 2:
+        return '🌍'
+    flag = ''.join(chr(127397 + ord(c)) for c in country_code.upper())
+    return flag
 
 def consultar_bin(bin_number):
     """
-    Consulta información de BIN usando binlist.net
+    Consulta información de BIN usando múltiples APIs
+    Fuentes: binlist.net, bincheck.io
     """
+    bin_number = bin_number[:6]
+    
+    # Primero intentar con binlist.net
     try:
-        bin_number = bin_number[:6]
-        
         url = f"https://lookup.binlist.net/{bin_number}"
-        headers = {
-            'Accept-Version': '3',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        
+        headers = {'Accept-Version': '3'}
         response = requests.get(url, headers=headers, timeout=5)
         
         if response.status_code == 200:
-            return response.json()
-        elif response.status_code == 404:
-            return {"error": "BIN no encontrado", "bin": bin_number}
-        elif response.status_code == 429:
-            return {"error": "Límite de peticiones excedido", "bin": bin_number}
-        else:
-            return {"error": f"Error {response.status_code}", "bin": bin_number}
+            data = response.json()
+            if data:
+                return {
+                    'scheme': data.get('scheme', 'UNKNOWN').upper(),
+                    'type': data.get('type', 'UNKNOWN').upper(),
+                    'brand': data.get('brand', data.get('scheme', 'UNKNOWN')).upper(),
+                    'country': data.get('country', {}).get('name', 'Unknown'),
+                    'country_code': data.get('country', {}).get('alpha2', 'XX'),
+                    'country_emoji': get_emoji_flag(data.get('country', {}).get('alpha2', 'XX')),
+                    'bank': data.get('bank', {}).get('name', 'Unknown'),
+                    'prepaid': data.get('prepaid', False)
+                }
+    except Exception:
+        pass
+    
+    # Si falla, intentar con bincheck.io (scraping)
+    try:
+        url = f"https://bincheck.io/bin/{bin_number}"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            html_content = response.text
             
-    except Exception as e:
-        return {"error": str(e), "bin": bin_number}
+            # Extraer información con regex
+            bank_match = re.search(r'<strong>Bank:</strong>\s*<a[^>]*>([^<]+)</a>', html_content, re.IGNORECASE)
+            scheme_match = re.search(r'<strong>Brand:</strong>\s*([^<]+)', html_content, re.IGNORECASE)
+            type_match = re.search(r'<strong>Type:</strong>\s*([^<]+)', html_content, re.IGNORECASE)
+            country_match = re.search(r'<strong>Country:</strong>\s*<a[^>]*>([^<]+)</a>', html_content, re.IGNORECASE)
+            country_code_match = re.search(r'<strong>Country:</strong>.*?<img[^>]*src="[^"]*flags/([a-z]{2})\.png', html_content, re.IGNORECASE)
+            
+            scheme = scheme_match.group(1).strip().upper() if scheme_match else 'UNKNOWN'
+            card_type = type_match.group(1).strip().upper() if type_match else 'UNKNOWN'
+            country_code = country_code_match.group(1).upper() if country_code_match else 'XX'
+            
+            return {
+                'scheme': scheme,
+                'type': card_type,
+                'brand': scheme,
+                'country': country_match.group(1).strip() if country_match else 'Unknown',
+                'country_code': country_code,
+                'country_emoji': get_emoji_flag(country_code),
+                'bank': bank_match.group(1).strip() if bank_match else 'Unknown',
+                'prepaid': 'prepaid' in html_content.lower()
+            }
+    except Exception:
+        pass
+    
+    # Si todo falla, devolver información por defecto
+    return {
+        'scheme': 'UNKNOWN',
+        'type': 'UNKNOWN',
+        'brand': 'UNKNOWN',
+        'country': 'Unknown',
+        'country_code': 'XX',
+        'country_emoji': '🌍',
+        'bank': 'Unknown',
+        'prepaid': False
+    }
 
 # ==================== FUNCIÓN AUXILIAR CAPTURE ====================
 
@@ -771,7 +825,6 @@ def verificar_api_autoshopify(cc, url, proxy=None):
         }
 
 # ==================== NUEVO GATEWAY: iSubscribe UK (£4.00) ====================
-# VERSIÓN CORREGIDA - SIEMPRE MUESTRA EL MENSAJE CORRECTO
 
 def verificar_isubscribe(cc, proxy=None):
     """
@@ -957,17 +1010,16 @@ def verificar_isubscribe(cc, proxy=None):
             allow_redirects=False
         )
         
-        # PASO 10: Verificar resultado - VERSIÓN CORREGIDA Y FORZADA
+        # PASO 10: Verificar resultado
         r = session.get(
             "https://www.isubscribe.co.uk/ssl/checkout/index.cfm?view=returning&step=confirm&formmode=edit&source=confirm&error=true&errorno=05",
             headers=headers,
             timeout=15
         )
         
-        # Extraer mensaje de error - CORRECCIÓN DEFINITIVA
+        # Extraer mensaje de error
         error_msg = "The transaction was declined, please check with the card issuer or use a different card."
         
-        # Buscar el mensaje de error específico
         decline_match = re.search(r'The transaction was declined[^<]*', r.text, re.IGNORECASE)
         if decline_match:
             error_msg = decline_match.group(0)
@@ -1065,19 +1117,18 @@ def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User",
     cvv = partes[3]
     bin_num = numero[:6]
     
-    # Extraer información del BIN
+    # Extraer información del BIN (MEJORADO)
     if bin_info and isinstance(bin_info, dict) and 'error' not in bin_info:
         scheme = bin_info.get('scheme', 'UNKNOWN').upper()
         card_type = bin_info.get('type', 'UNKNOWN').upper()
         
         # Datos del país
-        country_info = bin_info.get('country', {})
-        country_name = country_info.get('name', 'Unknown')
-        country_emoji = country_info.get('emoji', '🌍')
+        country_name = bin_info.get('country', 'Unknown')
+        country_emoji = bin_info.get('country_emoji', '🌍')
+        country_code = bin_info.get('country_code', 'XX')
         
         # Datos del banco
-        bank_info = bin_info.get('bank', {})
-        bank_name = bank_info.get('name', 'Unknown')
+        bank_name = bin_info.get('bank', 'Unknown')
         
         # Determinar tipo de tarjeta completo
         if scheme == "VISA":
@@ -1093,8 +1144,15 @@ def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User",
         else:
             tipo_completo = scheme
         
-        # Tipo específico (debit/credit)
-        tipo_especifico = card_type.capitalize() if card_type else "UNKNOWN"
+        # Tipo específico (debit/credit/prepaid)
+        if card_type == "CREDIT":
+            tipo_especifico = "CREDIT"
+        elif card_type == "DEBIT":
+            tipo_especifico = "DEBIT"
+        elif bin_info.get('prepaid', False):
+            tipo_especifico = "PREPAID"
+        else:
+            tipo_especifico = card_type.capitalize() if card_type != "UNKNOWN" else "UNKNOWN"
         
         # Información de país formateada
         country_line = f"{country_name} {country_emoji}"
@@ -2435,30 +2493,18 @@ def cmd_stats(message):
 def cmd_bin(message):
     try:
         bin_num = message.text.split()[1][:6]
+        info = consultar_bin(bin_num)
         
-        response = requests.get(f"https://lookup.binlist.net/{bin_num}", 
-                               headers={'Accept-Version': '3'})
-        
-        if response.status_code == 200:
-            data = response.json()
-            bank = data.get('bank', {}).get('name', 'N/A')
-            scheme = data.get('scheme', 'N/A').upper()
-            country = data.get('country', {}).get('name', 'N/A')
-            emoji = data.get('country', {}).get('emoji', '')
-            card_type = data.get('type', 'N/A')
-            
-            texto = f"""
+        texto = f"""
 🔍 INFORMACION DEL BIN {bin_num}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏦 Banco: {bank}
-💳 Marca: {scheme}
-🌍 País: {country} {emoji}
-📋 Tipo: {card_type}
+🏦 Banco: {info.get('bank', 'N/A')}
+💳 Marca: {info.get('scheme', 'N/A')}
+🌍 País: {info.get('country', 'N/A')} {info.get('country_emoji', '🌍')}
+📋 Tipo: {info.get('type', 'N/A')}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-            """
-            bot.reply_to(message, texto)
-        else:
-            bot.reply_to(message, "❌ BIN no encontrado")
+        """
+        bot.reply_to(message, texto)
     except:
         bot.reply_to(message, "❌ Uso: /bin 123456")
 
