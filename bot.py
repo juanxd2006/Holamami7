@@ -24,7 +24,7 @@ import socket
 import html
 
 # ==================== CONFIGURACIÓN ====================
-TOKEN = '8799575432:AAHlEVJ1e009BeiYatlFrXMGAgYbDhZWkKs'
+TOKEN = '8503937259:AAEApOgsbu34qw5J6OKz1dxgvRzrFv9IQdE'
 bot = telebot.TeleBot(TOKEN)
 
 # Variable global para el proxy
@@ -907,8 +907,6 @@ def verificar_isubscribe(cc, proxy=None):
         r = session.post("https://paynow.pmnts.io/sdk/credit_cards", 
                         headers=headers_card, json=data_card, timeout=15)
         
-        tok = capture(r.text, '"token":"', '"')
-        
         # PASO 8: Crear sesión SCA
         headers_sca = {
             "fz-merchant-username": "isubscribeunitedkingdom",
@@ -1415,7 +1413,7 @@ def cmd_sh(message):
 @bot.message_handler(commands=['uk'])
 def cmd_uk(message):
     """
-    Verificar con iSubscribe UK (£4.00)
+    Verificar con iSubscribe UK (£4.00) - NUEVO GATEWAY
     """
     global proxy_actual
     
@@ -1903,7 +1901,7 @@ def procesar_masivo_shopify(task_id, chat_id, delay, notificar_cada):
 @bot.message_handler(commands=['muk'])
 def cmd_mass_isubscribe(message):
     """
-    Verificación masiva con iSubscribe UK (£4.00)
+    Verificación masiva con iSubscribe UK (£4.00) - NUEVO
     """
     tarjetas = obtener_todas_tarjetas()
     
@@ -1911,7 +1909,6 @@ def cmd_mass_isubscribe(message):
         bot.reply_to(message, "📭 No hay tarjetas guardadas")
         return
     
-    # Procesar opciones
     texto = message.text.split()
     delay = 3
     notificar_cada = 10
@@ -1943,23 +1940,19 @@ def cmd_mass_isubscribe(message):
     
     bot.reply_to(message, config)
     
-    thread = Thread(target=procesar_masivo_isubscribe, 
-                   args=(task_id, message.chat.id, delay, notificar_cada))
+    thread = Thread(target=procesar_masivo_isubscribe, args=(task_id, message.chat.id, delay, notificar_cada))
     thread.daemon = True
     thread.start()
 
 def procesar_masivo_isubscribe(task_id, chat_id, delay, notificar_cada):
-    """
-    Procesa verificación masiva con iSubscribe UK
-    """
     cards = [c[0] for c in obtener_todas_tarjetas()]
     total = len(cards)
     
     if total == 0:
-        bot.send_message(chat_id, "📭 No hay tarjetas guardadas")
+        bot.send_message(chat_id, "📭 No hay tarjetas")
         return
     
-    msg = bot.send_message(chat_id, "🇬🇧 Iniciando verificación masiva iSubscribe UK...")
+    msg = bot.send_message(chat_id, "🇬🇧 Iniciando verificación iSubscribe UK...")
     
     resultados = {'success': 0, 'failed': 0, 'error': 0}
     detalles = []
@@ -1971,8 +1964,6 @@ def procesar_masivo_isubscribe(task_id, chat_id, delay, notificar_cada):
             break
         
         bin_info = consultar_bin(card[:6])
-        
-        # Usar proxy global si está configurado
         resultado = verificar_isubscribe(card, proxy_actual)
         
         if resultado:
@@ -1989,10 +1980,8 @@ def procesar_masivo_isubscribe(task_id, chat_id, delay, notificar_cada):
                 resultados['error'] += 1
                 emoji = "⚠️"
             
-            # Guardar detalle
             detalles.append(f"{emoji} {card} | {resultado['status']} | {resultado['message'][:50]} | {resultado['tiempo']}s")
         
-        # Actualizar cada N tarjetas
         if i % notificar_cada == 0 or i == total:
             porcentaje = (i / total) * 100
             barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
@@ -2012,7 +2001,6 @@ def procesar_masivo_isubscribe(task_id, chat_id, delay, notificar_cada):
         if delay > 0 and i < total:
             time.sleep(delay)
     
-    # Generar archivo de resultados
     tiempo_total = time.time() - start_time
     minutos = int(tiempo_total // 60)
     segundos = int(tiempo_total % 60)
@@ -2020,40 +2008,32 @@ def procesar_masivo_isubscribe(task_id, chat_id, delay, notificar_cada):
     filename = f"resultados_isubscribe_{task_id}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
         f.write(f"RESULTADOS iSubscribe UK (£4.00)\n")
-        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Total tarjetas: {total}\n")
-        f.write(f"Tiempo: {minutos}m {segundos}s\n")
-        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+        f.write(f"Total: {total}\n")
+        f.write(f"Tiempo: {minutos}m {segundos}s\n\n")
         f.write(f"✅ Aprobadas: {resultados['success']}\n")
         f.write(f"❌ Declinadas: {resultados['failed']}\n")
         f.write(f"⚠️ Errores: {resultados['error']}\n\n")
-        f.write(f"━━━━ DETALLES ━━━━━━━━━━━━━━\n\n")
         for d in detalles:
             f.write(f"{d}\n")
     
-    # Mensaje final
     texto_final = f"""✅ VERIFICACIÓN iSubscribe UK COMPLETADA
 ━━━━━━━━━━━━━━━━━━━━━━
 📊 RESULTADOS:
 ✅ Aprobadas: {resultados['success']}
 ❌ Declinadas: {resultados['failed']}
 ⚠️ Errores: {resultados['error']}
-⏱️ Tiempo: {minutos}m {segundos}s
-
-📁 Se generó archivo con detalles"""
+⏱️ Tiempo: {minutos}m {segundos}s"""
     
     try:
         bot.edit_message_text(texto_final, chat_id, msg.message_id)
     except:
         bot.send_message(chat_id, texto_final)
     
-    # Enviar archivo
     with open(filename, 'rb') as f:
         bot.send_document(chat_id, f, caption=f"🇬🇧 Resultados iSubscribe UK - {total} tarjetas")
     
     os.remove(filename)
-    
     time.sleep(300)
     if task_id in active_tasks:
         del active_tasks[task_id]
@@ -2097,6 +2077,66 @@ def cmd_stats(message):
 ━━━━━━━━━━━━━━━━━━━━━━"""
     bot.send_message(message.chat.id, texto)
 
+@bot.message_handler(commands=['addsh'])
+def cmd_add_sitio(message):
+    """Agrega un sitio Shopify"""
+    try:
+        url = message.text.split()[1]
+        if guardar_sitio(url):
+            bot.reply_to(message, f"✅ Sitio guardado:\n{url}")
+        else:
+            bot.reply_to(message, "❌ Error: El sitio ya existe o URL inválida")
+    except IndexError:
+        bot.reply_to(message, "❌ Uso: /addsh https://tienda.myshopify.com")
+
+@bot.message_handler(commands=['sitios'])
+def cmd_listar_sitios(message):
+    """Lista todos los sitios Shopify"""
+    sitios = obtener_sitios_con_estadisticas()
+    
+    if not sitios:
+        bot.send_message(message.chat.id, "📭 No hay sitios guardados")
+        return
+    
+    texto = "╔════════════════════════════╗\n║     🛍️ MIS SITIOS        ║\n╠════════════════════════════╣\n"
+    
+    for url, succ, fail, last_used in sitios[:10]:
+        url_short = url[:25] + "..." if len(url) > 25 else url
+        total = succ + fail
+        tasa = (succ/total*100) if total > 0 else 0
+        
+        texto += f"║ {url_short:<28} ║\n║    ├─ ✅ {succ}  ❌ {fail}        ║\n║    └─ 📊 {tasa:.1f}%            ║\n"
+    
+    texto += "╚════════════════════════════╝"
+    bot.send_message(message.chat.id, texto, reply_markup=menu_shopify())
+
+@bot.message_handler(commands=['delsh'])
+def cmd_del_sitio(message):
+    """Elimina un sitio Shopify"""
+    try:
+        url = message.text.split()[1]
+        if eliminar_sitio(url):
+            bot.reply_to(message, f"✅ Sitio eliminado: {url[:30]}...")
+        else:
+            bot.reply_to(message, "❌ Sitio no encontrado")
+    except IndexError:
+        bot.reply_to(message, "❌ Uso: /delsh https://tienda.myshopify.com")
+
+@bot.message_handler(commands=['delallsitios'])
+def cmd_del_all_sitios(message):
+    """Elimina TODOS los sitios"""
+    confirmacion = types.InlineKeyboardMarkup()
+    btn1 = types.InlineKeyboardButton("✅ Sí, eliminar todos", callback_data='confirm_del_all_sitios')
+    btn2 = types.InlineKeyboardButton("❌ No, cancelar", callback_data='cancel_del_all_sitios')
+    confirmacion.add(btn1, btn2)
+    
+    bot.reply_to(
+        message, 
+        "⚠️ *¿ESTÁS SEGURO?*\n\nEsto eliminará TODOS los sitios guardados permanentemente.",
+        parse_mode='Markdown',
+        reply_markup=confirmacion
+    )
+
 @bot.message_handler(func=lambda m: m.text and m.text.startswith('/cancelar_'))
 def cancelar_tarea(message):
     task_id = message.text.replace('/cancelar_', '')
@@ -2134,12 +2174,22 @@ def callback_handler(call):
     
     elif call.data == 'menu_proxies':
         bot.send_message(call.message.chat.id, "🌐 Proxies:\n/px - Test rápido\n/proxy PROXY - Configurar")
+    
+    elif call.data == 'confirm_del_all_sitios':
+        cantidad = eliminar_todos_sitios()
+        bot.answer_callback_query(call.id, f"🗑️ Se eliminaron {cantidad} sitios")
+        bot.edit_message_text("✅ Todos los sitios han sido eliminados", call.message.chat.id, call.message.message_id)
+    
+    elif call.data == 'cancel_del_all_sitios':
+        bot.answer_callback_query(call.id, "❌ Operación cancelada")
+        bot.edit_message_text("✅ Operación cancelada", call.message.chat.id, call.message.message_id)
 
 # ==================== INICIAR BOT ====================
 if __name__ == "__main__":
     print("="*70)
     print("🤖 AUTO SHOPIFY BOT - VERSIÓN COMPLETA")
     print("="*70)
+    print("✅ Token configurado")
     print("✅ Gates disponibles:")
     print("   • Stripe $1 No AVS  → /check5")
     print("   • PayPal            → /pp, /pp2, /pp3")
@@ -2155,12 +2205,16 @@ if __name__ == "__main__":
     print("✅ Proxies:")
     print("   • /px - Test ULTRA RÁPIDO")
     print("="*70)
+    print("✅ Sitios Shopify:")
+    print("   • /addsh, /sitios, /delsh, /delallsitios, /cleansites")
+    print("="*70)
     print("📱 Bot iniciado. Presiona Ctrl+C para detener")
     print("="*70)
     
     while True:
         try:
-            bot.infinity_polling(timeout=60, long_polling_timeout=60)
+            bot.infinity_polling(timeout=60, long_polling_timeout=60, skip_pending=True)
         except Exception as e:
             print(f"❌ Error en polling: {e}")
+            print("🔄 Reintentando en 5 segundos...")
             time.sleep(5)
