@@ -116,43 +116,41 @@ def init_database():
 # Inicializar BD
 init_database()
 
-# ==================== FUNCIONES DE EXTRACCIÓN ====================
+# ==================== FUNCIONES DE EXTRACCIÓN MEJORADAS ====================
 
 def extraer_urls_de_texto(texto):
     """
-    Extrae URLs de cualquier texto (formato libre) - ACEPTA TODO TIPO DE URL
+    Extrae SOLO URLs de cualquier texto, ignorando precios, números, etc.
+    Ejemplo: "11. https://www.bioseaweedgel.com - $10.25" -> "https://www.bioseaweedgel.com"
     """
-    # Patrón para cualquier URL
-    patrones = [
-        r'https?://[a-zA-Z0-9.-]+(\.[a-zA-Z]{2,})+(/[^\s<>"\']*)?',
-        r'https?://[a-zA-Z0-9.-]+(\.[a-zA-Z]{2,})+',
-        r'[a-zA-Z0-9-]+\.myshopify\.com',
-        r'[a-zA-Z0-9-]+\.com/[^\s]+',
-        r'[a-zA-Z0-9-]+\.org/[^\s]+',
-        r'[a-zA-Z0-9-]+\.net/[^\s]+',
-    ]
+    # Patrón para encontrar URLs
+    patron = r'https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s<>"\']*)?'
     
-    urls = []
-    for patron in patrones:
-        encontrados = re.findall(patron, texto, re.IGNORECASE)
-        for url in encontrados:
-            if isinstance(url, tuple):
-                url = url[0]
-            url = url.strip()
-            if not url.startswith('http'):
-                url = 'https://' + url
-            urls.append(url)
+    urls = re.findall(patron, texto, re.IGNORECASE)
     
-    # Eliminar duplicados
-    urls = list(set(urls))
-    
-    # Filtrar URLs válidas
-    urls_validas = []
+    # Limpiar URLs: eliminar caracteres no deseados al final
+    urls_limpias = []
     for url in urls:
-        if re.match(r'https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', url):
-            urls_validas.append(url)
+        url = url.strip()
+        # Eliminar caracteres como puntos, comas, paréntesis al final
+        url = re.sub(r'[.,;:)\]}>"\']+$', '', url)
+        # Eliminar parámetros comunes al final
+        url = re.sub(r'\?.*$', '', url)
+        # Eliminar fragmentos (#)
+        url = re.sub(r'#.*$', '', url)
+        
+        if url.startswith('http'):
+            urls_limpias.append(url)
     
-    return urls_validas
+    # Eliminar duplicados y mantener orden
+    urls_vistas = []
+    resultado = []
+    for url in urls_limpias:
+        if url not in urls_vistas:
+            urls_vistas.append(url)
+            resultado.append(url)
+    
+    return resultado
 
 def extraer_proxies_de_texto(texto):
     """
@@ -179,7 +177,7 @@ def extraer_proxies_de_texto(texto):
             else:
                 proxy = f"{ip}:{puerto}"
             
-            # Validar puerto
+            # Validar que el puerto sea válido (1-65535)
             if 1 <= int(puerto) <= 65535:
                 proxies.append(proxy)
     
@@ -203,27 +201,6 @@ def guardar_proxy(proxy):
     finally:
         if conn:
             conn.close()
-
-def guardar_proxies_desde_texto(texto):
-    """Guarda proxies desde un archivo de texto"""
-    proxies = extraer_proxies_de_texto(texto)
-    guardados = 0
-    repetidos = 0
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    for proxy in proxies:
-        try:
-            cursor.execute("INSERT INTO proxies (proxy, fecha) VALUES (?, ?)",
-                          (proxy, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-            conn.commit()
-            guardados += 1
-        except:
-            repetidos += 1
-    
-    conn.close()
-    return guardados, repetidos, len(proxies) - guardados - repetidos
 
 def obtener_proxies():
     """Obtiene todos los proxies"""
@@ -322,27 +299,6 @@ def guardar_sitio(url):
         if conn:
             conn.close()
 
-def guardar_sitios_desde_texto(texto):
-    """Guarda sitios desde un archivo de texto"""
-    urls = extraer_urls_de_texto(texto)
-    guardados = 0
-    repetidos = 0
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    for url in urls:
-        try:
-            cursor.execute("INSERT INTO sitios (url, fecha) VALUES (?, ?)",
-                          (url, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-            conn.commit()
-            guardados += 1
-        except:
-            repetidos += 1
-    
-    conn.close()
-    return guardados, repetidos, len(urls) - guardados - repetidos
-
 def obtener_sitios():
     """Obtiene todos los sitios"""
     conn = get_db_connection()
@@ -426,6 +382,30 @@ def limpiar_sitios_muertos():
         'captcha required'
     ]
     
+    # Respuestas que indican sitio muerto (incluye r4 token empty)
+    respuestas_muertas = [
+        'py id empty',
+        'r4 token empty',
+        'token empty',
+        'invalid token',
+        'empty response',
+        'no response',
+        'null response',
+        'api error',
+        '404',
+        '500',
+        '502',
+        '503',
+        'not found',
+        'connection refused',
+        'timeout',
+        'ssl error',
+        'page not found',
+        'access denied',
+        'forbidden',
+        'server error'
+    ]
+    
     eliminados = 0
     for sitio in sitios:
         sitio_id = sitio['id']
@@ -441,19 +421,7 @@ def limpiar_sitios_muertos():
             # Verificar si la respuesta es válida
             es_valida = any(rv in mensaje for rv in respuestas_validas)
             
-            # Respuestas que indican sitio muerto
-            respuestas_muertas = [
-                'py id empty',
-                '404',
-                'not found',
-                'connection refused',
-                'timeout',
-                'ssl error',
-                '500',
-                '502',
-                '503'
-            ]
-            
+            # Verificar si el sitio está muerto
             es_muerto = any(rm in mensaje for rm in respuestas_muertas)
             
             # Si es muerto o tiene demasiados fallos, eliminar
@@ -463,7 +431,6 @@ def limpiar_sitios_muertos():
                 print(f"🗑️ Sitio eliminado: {url} - Motivo: {'muerto' if es_muerto else 'respuesta inválida'}")
             
         except Exception as e:
-            # Si hay error, eliminar después de 3 intentos
             if failures >= 3:
                 cursor.execute("DELETE FROM sitios WHERE id = ?", (sitio_id,))
                 eliminados += 1
@@ -1521,7 +1488,6 @@ def cmd_export_proxies(message):
         bot.reply_to(message, "📭 No hay proxies guardados para exportar")
         return
     
-    # Generar archivo
     filename = f"proxies_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
         f.write("# PROXIES EXPORTADOS\n")
@@ -1531,7 +1497,6 @@ def cmd_export_proxies(message):
         for proxy in proxies:
             f.write(f"{proxy}\n")
     
-    # Enviar archivo
     with open(filename, 'rb') as f:
         bot.send_document(
             message.chat.id,
@@ -1539,7 +1504,6 @@ def cmd_export_proxies(message):
             caption=f"📦 Exportación de proxies\n📊 Total: {len(proxies)} proxies\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
     
-    # Limpiar archivo temporal
     os.remove(filename)
 
 # ==================== COMANDOS DE VERIFICACIÓN ====================
@@ -1699,7 +1663,6 @@ def cmd_shopify(message):
             bot.reply_to(message, "❌ Formato incorrecto. Usa: NUMERO|MES|AÑO|CVV")
             return
         
-        # Obtener sitio usando rotación o el especificado
         if len(partes) == 3:
             url = partes[2]
             sitios = obtener_sitios()
@@ -1712,7 +1675,6 @@ def cmd_shopify(message):
                 bot.reply_to(message, "❌ No hay sitios guardados. Usa /addsh para agregar uno.")
                 return
         
-        # Obtener proxy usando rotación
         proxy = obtener_proximo_proxy()
         
         numero = cc.split('|')[0]
@@ -1777,7 +1739,7 @@ def cmd_uk(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
-# ==================== COMANDOS MASIVOS ====================
+# ==================== COMANDOS MASIVOS (RESUMIDOS) ====================
 
 @bot.message_handler(commands=['mass'])
 def cmd_mass_stripe(message):
@@ -2134,11 +2096,9 @@ def procesar_masivo_shopify(task_id, chat_id, delay, notificar_cada):
             bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
             break
         
-        # Rotación de sitios
         sitio = sitios[sitio_index_local % total_sitios]
         sitio_index_local += 1
         
-        # Rotación de proxies
         if total_proxies > 0:
             proxy = proxies[proxy_index_local % total_proxies]
             proxy_index_local += 1
@@ -2151,15 +2111,13 @@ def procesar_masivo_shopify(task_id, chat_id, delay, notificar_cada):
         if resultado:
             mensaje = resultado.get('message', '').lower()
             
-            # Verificar si el sitio está muerto
-            respuestas_muertas = ['py id empty', '404', 'not found', 'connection refused']
+            respuestas_muertas = ['py id empty', '404', 'not found', 'connection refused', 'r4 token empty', 'token empty']
             if any(rm in mensaje for rm in respuestas_muertas):
                 if sitio not in sitios_a_eliminar:
                     sitios_a_eliminar.append(sitio)
                     resultados['sitios_eliminados'] += 1
                     print(f"🗑️ Sitio marcado para eliminar: {sitio}")
             
-            # Guardar en historial solo si el sitio es válido
             if sitio not in sitios_a_eliminar:
                 guardar_historial(card, resultado['proxy'], f"Shopify ${resultado['amount']}", 
                                 resultado['amount'], resultado['status'], 
@@ -2201,7 +2159,6 @@ def procesar_masivo_shopify(task_id, chat_id, delay, notificar_cada):
         if delay > 0 and i < total_tarjetas:
             time.sleep(delay)
     
-    # Eliminar sitios muertos
     if sitios_a_eliminar:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -2467,7 +2424,7 @@ def handle_document(message):
         # Extraer proxies de cualquier formato
         proxies = extraer_proxies_de_texto(contenido)
         
-        # Detectar tarjetas (formato NUMERO|MES|AÑO|CVV)
+        # Detectar tarjetas
         lineas = contenido.strip().split('\n')
         es_tarjeta = False
         tarjetas = []
@@ -2481,9 +2438,7 @@ def handle_document(message):
                         es_tarjeta = True
                         tarjetas.append(linea)
         
-        # Determinar qué tipo de archivo es
         if tarjetas and len(tarjetas) > 0:
-            # Es archivo de tarjetas
             guardadas = 0
             repetidas = 0
             
@@ -2507,7 +2462,6 @@ def handle_document(message):
             bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
         
         elif proxies and len(proxies) > 0:
-            # Es archivo de proxies
             guardados = 0
             repetidos = 0
             
@@ -2531,7 +2485,6 @@ def handle_document(message):
             bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
         
         elif urls and len(urls) > 0:
-            # Es archivo de sitios
             guardados = 0
             repetidos = 0
             for url in urls:
@@ -2582,7 +2535,7 @@ def callback_handler(call):
         bot.send_message(call.message.chat.id, "💳 STRIPE $1 NO AVS\n\nUsa: /check5 NUMERO|MES|AÑO|CVV\n\nMasivo: /mass")
     
     elif call.data == 'menu_shopify':
-        bot.edit_message_text("🛍️ GESTIÓN DE SITIOS SHOPIFY\n\nSelecciona una opción:", call.message.chat.id, call.message.message_id, reply_markup=menu_shopify())
+        bot.edit_message_text("🛍️ GESTIÓN DE SITIOS\n\nSelecciona una opción:", call.message.chat.id, call.message.message_id, reply_markup=menu_shopify())
     
     elif call.data == 'menu_isubscribe':
         bot.send_message(call.message.chat.id, "🇬🇧 iSubscribe UK £4.00\n\nUsa: /uk NUMERO|MES|AÑO|CVV\n\nMasivo: /muk")
@@ -2600,7 +2553,7 @@ def callback_handler(call):
         bot.send_message(call.message.chat.id, "🛍️ AUTOSHOPIFY\n\nUsa: /sh NUMERO|MES|AÑO|CVV\n\nOpcional: /sh CC URL")
     
     elif call.data == 'shopify_masivo':
-        bot.send_message(call.message.chat.id, "📦 VERIFICACIÓN MASIVA SHOPIFY\n\nUsa: /msh\n\nOpciones: /msh --delay 3 --notificar 10")
+        bot.send_message(call.message.chat.id, "📦 VERIFICACIÓN MASIVA\n\nUsa: /msh\n\nOpciones: /msh --delay 3 --notificar 10")
     
     elif call.data == 'add_sitio':
         msg = bot.send_message(call.message.chat.id, "➕ AÑADIR SITIO\n\nEnvía la URL del sitio:")
