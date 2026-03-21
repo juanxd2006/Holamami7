@@ -116,6 +116,75 @@ def init_database():
 # Inicializar BD
 init_database()
 
+# ==================== FUNCIONES DE EXTRACCIÓN ====================
+
+def extraer_urls_de_texto(texto):
+    """
+    Extrae URLs de cualquier texto (formato libre) - ACEPTA TODO TIPO DE URL
+    """
+    # Patrón para cualquier URL
+    patrones = [
+        r'https?://[a-zA-Z0-9.-]+(\.[a-zA-Z]{2,})+(/[^\s<>"\']*)?',
+        r'https?://[a-zA-Z0-9.-]+(\.[a-zA-Z]{2,})+',
+        r'[a-zA-Z0-9-]+\.myshopify\.com',
+        r'[a-zA-Z0-9-]+\.com/[^\s]+',
+        r'[a-zA-Z0-9-]+\.org/[^\s]+',
+        r'[a-zA-Z0-9-]+\.net/[^\s]+',
+    ]
+    
+    urls = []
+    for patron in patrones:
+        encontrados = re.findall(patron, texto, re.IGNORECASE)
+        for url in encontrados:
+            if isinstance(url, tuple):
+                url = url[0]
+            url = url.strip()
+            if not url.startswith('http'):
+                url = 'https://' + url
+            urls.append(url)
+    
+    # Eliminar duplicados
+    urls = list(set(urls))
+    
+    # Filtrar URLs válidas
+    urls_validas = []
+    for url in urls:
+        if re.match(r'https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', url):
+            urls_validas.append(url)
+    
+    return urls_validas
+
+def extraer_proxies_de_texto(texto):
+    """
+    Extrae proxies de cualquier texto (formato libre)
+    Detecta formatos: ip:puerto o ip:puerto:user:pass
+    """
+    # Patrón para IP:Puerto (con o sin autenticación)
+    patron_proxy = re.compile(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})(?::([^:\s]+):([^:\s]+))?\b')
+    
+    proxies = []
+    for match in patron_proxy.finditer(texto):
+        ip = match.group(1)
+        puerto = match.group(2)
+        user = match.group(3)
+        pwd = match.group(4)
+        
+        # Validar que la IP sea válida
+        partes_ip = ip.split('.')
+        ip_valida = all(0 <= int(p) <= 255 for p in partes_ip)
+        
+        if ip_valida:
+            if user and pwd:
+                proxy = f"{ip}:{puerto}:{user}:{pwd}"
+            else:
+                proxy = f"{ip}:{puerto}"
+            
+            # Validar puerto
+            if 1 <= int(puerto) <= 65535:
+                proxies.append(proxy)
+    
+    return list(set(proxies))
+
 # ==================== FUNCIONES DE PROXIES ====================
 
 def guardar_proxy(proxy):
@@ -137,34 +206,24 @@ def guardar_proxy(proxy):
 
 def guardar_proxies_desde_texto(texto):
     """Guarda proxies desde un archivo de texto"""
-    lineas = texto.strip().split('\n')
+    proxies = extraer_proxies_de_texto(texto)
     guardados = 0
     repetidos = 0
-    invalidos = 0
-    
-    patron_proxy = re.compile(r'^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d+)(?::([^:]+):([^:]+))?$')
     
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    for linea in lineas:
-        linea = linea.strip()
-        if not linea:
-            continue
-        
-        if patron_proxy.match(linea):
-            try:
-                cursor.execute("INSERT INTO proxies (proxy, fecha) VALUES (?, ?)",
-                              (linea, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                conn.commit()
-                guardados += 1
-            except:
-                repetidos += 1
-        else:
-            invalidos += 1
+    for proxy in proxies:
+        try:
+            cursor.execute("INSERT INTO proxies (proxy, fecha) VALUES (?, ?)",
+                          (proxy, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            conn.commit()
+            guardados += 1
+        except:
+            repetidos += 1
     
     conn.close()
-    return guardados, repetidos, invalidos
+    return guardados, repetidos, len(proxies) - guardados - repetidos
 
 def obtener_proxies():
     """Obtiene todos los proxies"""
@@ -246,25 +305,6 @@ def actualizar_status_proxy(proxy, status, tiempo):
 
 # ==================== FUNCIONES PARA SITIOS ====================
 
-def extraer_urls_de_texto(texto):
-    """Extrae todas las URLs de un texto (formato libre)"""
-    # Patrón para detectar URLs (http:// o https://)
-    patron_url = re.compile(r'https?://[a-zA-Z0-9.-]+(\.[a-zA-Z]{2,})+[^\s<>"\']*')
-    
-    urls = patron_url.findall(texto)
-    
-    # Limpiar URLs (eliminar caracteres no deseados al final)
-    urls_limpias = []
-    for url in urls:
-        url = url.strip()
-        # Eliminar caracteres comunes al final
-        url = re.sub(r'[.,;:)\]}>]+$', '', url)
-        # Asegurar que termina con / o tiene formato válido
-        if url.startswith('http'):
-            urls_limpias.append(url)
-    
-    return list(set(urls_limpias))
-
 def guardar_sitio(url):
     """Guarda un sitio en la base de datos"""
     conn = None
@@ -281,6 +321,27 @@ def guardar_sitio(url):
     finally:
         if conn:
             conn.close()
+
+def guardar_sitios_desde_texto(texto):
+    """Guarda sitios desde un archivo de texto"""
+    urls = extraer_urls_de_texto(texto)
+    guardados = 0
+    repetidos = 0
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    for url in urls:
+        try:
+            cursor.execute("INSERT INTO sitios (url, fecha) VALUES (?, ?)",
+                          (url, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            conn.commit()
+            guardados += 1
+        except:
+            repetidos += 1
+    
+    conn.close()
+    return guardados, repetidos, len(urls) - guardados - repetidos
 
 def obtener_sitios():
     """Obtiene todos los sitios"""
@@ -445,13 +506,16 @@ def guardar_tarjetas_desde_texto(texto):
             continue
         partes = linea.split('|')
         if len(partes) == 4:
-            try:
-                cursor.execute("INSERT INTO tarjetas (cc, fecha) VALUES (?, ?)",
-                              (linea, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                conn.commit()
-                guardadas += 1
-            except:
-                repetidas += 1
+            if all(p.isdigit() for p in partes):
+                try:
+                    cursor.execute("INSERT INTO tarjetas (cc, fecha) VALUES (?, ?)",
+                                  (linea, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                    conn.commit()
+                    guardadas += 1
+                except:
+                    repetidas += 1
+            else:
+                invalidas += 1
         else:
             invalidas += 1
     
@@ -550,7 +614,7 @@ def obtener_estadisticas():
         'aprobadas': total_success or 0
     }
 
-# ==================== FUNCIÓN DE CONSULTA BIN MEJORADA ====================
+# ==================== FUNCIÓN DE CONSULTA BIN ====================
 
 def get_emoji_flag(country_code):
     """Convierte código de país a emoji de bandera"""
@@ -1283,8 +1347,9 @@ def menu_proxies():
     btn4 = types.InlineKeyboardButton("🗑️ Eliminar TODOS", callback_data='del_all_proxies')
     btn5 = types.InlineKeyboardButton("🧹 Limpiar muertos", callback_data='clean_dead')
     btn6 = types.InlineKeyboardButton("⚡ Test ultra rápido", callback_data='test_proxies_fast')
-    btn7 = types.InlineKeyboardButton("🔙 Volver", callback_data='volver_principal')
-    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7)
+    btn7 = types.InlineKeyboardButton("📥 Exportar proxies", callback_data='export_proxies')
+    btn8 = types.InlineKeyboardButton("🔙 Volver", callback_data='volver_principal')
+    markup.add(btn1, btn2, btn3, btn4, btn5, btn6, btn7, btn8)
     return markup
 
 def menu_paypal():
@@ -1334,6 +1399,7 @@ def cmd_menu(message):
         "║  ⚡ Otros:                  ║\n"
         "║  • /px - Test proxies      ║\n"
         "║  • /cleansites - Limpiar   ║\n"
+        "║  • /exportproxies - Exportar║\n"
         "╚════════════════════════════╝\n\n"
         "Selecciona una opción:"
     )
@@ -1357,6 +1423,7 @@ def cmd_help(message):
         "║  • /muk - iSubscribe masivo║\n"
         "║  • /px - Test proxies      ║\n"
         "║  • /cleansites - Limpiar   ║\n"
+        "║  • /exportproxies - Exportar║\n"
         "║  • /bin BIN - Consultar BIN║\n"
         "║  • /stats - Estadísticas   ║\n"
         "╚════════════════════════════╝"
@@ -1373,7 +1440,7 @@ def cmd_add_sitio(message):
         else:
             bot.reply_to(message, "❌ Error: El sitio ya existe o URL inválida")
     except IndexError:
-        bot.reply_to(message, "❌ Uso: /addsh https://tienda.com")
+        bot.reply_to(message, "❌ Uso: /addsh https://ejemplo.com")
 
 @bot.message_handler(commands=['sitios'])
 def cmd_listar_sitios(message):
@@ -1406,7 +1473,7 @@ def cmd_del_sitio(message):
         else:
             bot.reply_to(message, "❌ Sitio no encontrado")
     except IndexError:
-        bot.reply_to(message, "❌ Uso: /delsh https://tienda.com")
+        bot.reply_to(message, "❌ Uso: /delsh https://ejemplo.com")
 
 @bot.message_handler(commands=['delallsitios'])
 def cmd_del_all_sitios(message):
@@ -1444,6 +1511,36 @@ han sido eliminados automáticamente."""
         
     except Exception as e:
         bot.edit_message_text(f"❌ Error: {str(e)}", message.chat.id, msg.message_id)
+
+@bot.message_handler(commands=['exportproxies', 'exportarproxies'])
+def cmd_export_proxies(message):
+    """Exporta todos los proxies a un archivo TXT"""
+    proxies = obtener_proxies()
+    
+    if not proxies:
+        bot.reply_to(message, "📭 No hay proxies guardados para exportar")
+        return
+    
+    # Generar archivo
+    filename = f"proxies_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write("# PROXIES EXPORTADOS\n")
+        f.write(f"# Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"# Total: {len(proxies)}\n")
+        f.write("# ========================================\n\n")
+        for proxy in proxies:
+            f.write(f"{proxy}\n")
+    
+    # Enviar archivo
+    with open(filename, 'rb') as f:
+        bot.send_document(
+            message.chat.id,
+            f,
+            caption=f"📦 Exportación de proxies\n📊 Total: {len(proxies)} proxies\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+    
+    # Limpiar archivo temporal
+    os.remove(filename)
 
 # ==================== COMANDOS DE VERIFICACIÓN ====================
 
@@ -1680,7 +1777,7 @@ def cmd_uk(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
-# ==================== COMANDOS MASIVOS (RESUMIDOS) ====================
+# ==================== COMANDOS MASIVOS ====================
 
 @bot.message_handler(commands=['mass'])
 def cmd_mass_stripe(message):
@@ -2364,23 +2461,77 @@ def handle_document(message):
         downloaded_file = bot.download_file(file_info.file_path)
         contenido = downloaded_file.decode('utf-8')
         
-        # Extraer URLs de cualquier formato de texto
+        # Extraer URLs de cualquier formato
         urls = extraer_urls_de_texto(contenido)
         
-        # Detectar tipo de contenido
+        # Extraer proxies de cualquier formato
+        proxies = extraer_proxies_de_texto(contenido)
+        
+        # Detectar tarjetas (formato NUMERO|MES|AÑO|CVV)
         lineas = contenido.strip().split('\n')
         es_tarjeta = False
-        es_proxy = False
+        tarjetas = []
         
-        for linea in lineas[:10]:
+        for linea in lineas[:20]:
             linea = linea.strip()
-            if '|' in linea and len(linea.split('|')) == 4:
-                es_tarjeta = True
-            elif re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+', linea):
-                es_proxy = True
+            if '|' in linea:
+                partes = linea.split('|')
+                if len(partes) == 4:
+                    if all(p.isdigit() for p in partes):
+                        es_tarjeta = True
+                        tarjetas.append(linea)
         
-        # Si hay URLs y no son tarjetas ni proxies, son sitios
-        if urls and not es_tarjeta and not es_proxy:
+        # Determinar qué tipo de archivo es
+        if tarjetas and len(tarjetas) > 0:
+            # Es archivo de tarjetas
+            guardadas = 0
+            repetidas = 0
+            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            for cc in tarjetas:
+                try:
+                    cursor.execute("INSERT INTO tarjetas (cc, fecha) VALUES (?, ?)",
+                                  (cc, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                    conn.commit()
+                    guardadas += 1
+                except:
+                    repetidas += 1
+            conn.close()
+            
+            texto = f"""✅ TARJETAS CARGADAS
+━━━━━━━━━━━━━━━━━━━━━━
+📦 Guardadas: {guardadas}
+🔁 Repetidas: {repetidas}
+❌ Inválidas: {len(tarjetas) - guardadas - repetidas}"""
+            bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
+        
+        elif proxies and len(proxies) > 0:
+            # Es archivo de proxies
+            guardados = 0
+            repetidos = 0
+            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            for proxy in proxies:
+                try:
+                    cursor.execute("INSERT INTO proxies (proxy, fecha) VALUES (?, ?)",
+                                  (proxy, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+                    conn.commit()
+                    guardados += 1
+                except:
+                    repetidos += 1
+            conn.close()
+            
+            texto = f"""✅ PROXIES CARGADOS
+━━━━━━━━━━━━━━━━━━━━━━
+📦 Guardados: {guardados}
+🔁 Repetidos: {repetidos}
+❌ Inválidos: {len(proxies) - guardados - repetidos}"""
+            bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
+        
+        elif urls and len(urls) > 0:
+            # Es archivo de sitios
             guardados = 0
             repetidos = 0
             for url in urls:
@@ -2398,29 +2549,10 @@ def handle_document(message):
 Los sitios se verificarán automáticamente
 y se eliminarán los que no funcionen.
 🔄 Se usarán en rotación con /sh y /msh"""
-            
-            bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
-        
-        elif es_tarjeta:
-            guardadas, repetidas, invalidas = guardar_tarjetas_desde_texto(contenido)
-            texto = f"""✅ TARJETAS CARGADAS
-━━━━━━━━━━━━━━━━━━━━━━
-📦 Guardadas: {guardadas}
-🔁 Repetidas: {repetidas}
-❌ Inválidas: {invalidas}"""
-            bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
-        
-        elif es_proxy:
-            guardados, repetidos, invalidos = guardar_proxies_desde_texto(contenido)
-            texto = f"""✅ PROXIES CARGADOS
-━━━━━━━━━━━━━━━━━━━━━━
-📦 Guardados: {guardados}
-🔁 Repetidos: {repetidos}
-❌ Inválidos: {invalidos}"""
             bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
         
         else:
-            texto = "❌ No se pudo identificar el tipo de archivo.\n\nFormatos válidos:\n💳 Tarjetas: NUMERO|MES|AÑO|CVV\n🌐 Proxies: ip:puerto:user:pass\n🛍️ Sitios: cualquier URL"
+            texto = "❌ No se pudo identificar el tipo de archivo.\n\nFormatos válidos:\n💳 Tarjetas: NUMERO|MES|AÑO|CVV\n🌐 Proxies: ip:puerto o ip:puerto:user:pass\n🛍️ Sitios: cualquier URL (https://...)"
             bot.edit_message_text(texto, message.chat.id, msg.message_id, reply_markup=menu_principal())
         
     except Exception as e:
@@ -2536,6 +2668,9 @@ def callback_handler(call):
         eliminados = eliminar_proxies_muertos()
         bot.send_message(call.message.chat.id, f"🧹 Se eliminaron {eliminados} proxies muertos", reply_markup=menu_proxies())
     
+    elif call.data == 'export_proxies':
+        cmd_export_proxies(call.message)
+    
     elif call.data == 'clean_sites':
         try:
             eliminados = limpiar_sitios_muertos()
@@ -2644,6 +2779,7 @@ if __name__ == "__main__":
     print("✅ Proxies:")
     print("   • /px - Test ULTRA RÁPIDO")
     print("   • /proxy - Configurar proxy manual")
+    print("   • /exportproxies - Exportar todos los proxies")
     print("   • Rotación automática en cada verificación")
     print("="*80)
     print("✅ Sitios:")
